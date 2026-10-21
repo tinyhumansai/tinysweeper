@@ -112,10 +112,84 @@ went over budget, and no case newly failed to review.
 `seed` is honoured and the gateway routes where it likes — and teaches people to
 re-run CI rather than to read it.
 
-Two runs are only comparable when the corpus digest and the config digest match.
-A stricter gate finds fewer things without the reviewer having got worse, so
-`eval report --baseline` refuses that comparison rather than letting somebody
-read it as a regression. `--allow-config-drift` makes it anyway, and says so.
+Two runs are only comparable when corpus, config, selected cases, and execution
+limits match. The scorecard persists selected case IDs, the run ceiling, the
+requested per-case physical-call ceiling, each case's actually admitted call
+allowance, replay mode, and each derived per-case model budget. A continuation
+can admit fewer calls than requested because earlier attempts already consumed
+the cumulative ceiling; that actual allowance is part of comparison identity.
+A legacy scorecard without these limits is unknown and fails closed;
+`--allow-config-drift` is the explicit override, and the report says so.
+Recording scorecards from before admitted allowances were persisted also fail
+closed; replay scorecards may legitimately have no provider-call allowance.
+`eval score` carries these limits forward and re-scores only the original
+selection, so it cannot silently expand a selected run to the full corpus.
+
+When an admitted recording attempt starts, any existing top-level cassette take
+files for that case move into `recording-attempts/<case>/prior-takes/<attempt>/`.
+The append-only reservation audit remains in place, while strict replay reads
+only the latest attempt's takes instead of combining a new short recording with
+an older tail.
+
+The CI replay keeps its three default-profile cassettes separate from the five
+historical GPT-OSS/Novita cases. Each exact group writes a separate scorecard;
+the workflow verifies case IDs, strict replay completion, and zero loose
+replays before publishing each scorecard. It does not run an unfiltered score
+or compare these differently bounded groups against the full-corpus baseline.
+
+## Historical miss cases and measured recording baseline
+
+The corpus includes five externally verified misses from the original
+reviewed heads of `tinymcp#102`, `openhuman#8061`, and `openhuman#8076`. Each
+expectation is anchored to the changed hunk from the external review and cites
+the follow-up fix. These historical reviews establish why the labels are
+valid; they are not outputs from the current TinySweeper pipeline.
+
+The following measurements use the recording-only GPT-OSS 120B profile pinned
+to Novita (`evals/recording.gptoss-novita.toml`), not the production review
+configuration. All five reviews completed the `critique` lane. The lane covered
+every eligible added or modified file; the first fixture also contains one
+deletion-only file, which has no changed head lines to anchor a critique and is
+excluded by lane policy. The per-case score is:
+
+| Case | Coverage | Expected matched | Expected missed | Unscored | Known cost |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `tm-0102-memory-pending-debug-state` | 10/11 (1 deletion-only file excluded) | 0/1 | E1 | 3 | $0.011998 |
+| `oh-8061-standalone-local-only-policy` | 9/9 | 0/1 | E1 | 3 | $0.009062 |
+| `oh-8061-speech-redirect-origin` | 9/9 | 0/1 | E1 | 1 | $0.010656 |
+| `oh-8061-privacy-docs-contract-mismatch` | 9/9 | 0/1 | E1 | 3 | $0.010875 |
+| `oh-8076-credential-read-failure-migration` | 6/6 | 0/1 | E1 | 1 | $0.008242 |
+| **Aggregate** | **43/44 (1 deletion-only file excluded)** | **0/5** | **5** | **11** | **$0.050833** |
+
+All five completed eligible reviews missed their labelled finding. The 43
+reviewed paths are the 44 changed fixture paths minus the one deletion-only
+path; there were no unanswered eligible paths. The aggregate is the
+measured result for this corpus and recording profile, not a production
+benchmark or a claim about other lanes. The initial DeepSeek V3.2 capture for
+`tm-0102-memory-pending-debug-state` is a separate partial baseline: it stopped
+at its eight-call limit with ten files unanswered. Its miss is excluded from
+the aggregate above. See [`evals/README.md`](../../../evals/README.md) for case
+provenance and the [recording runbook](recording-and-48h-runbook.md) for the
+provider, configuration and observation limits.
+
+Each case selects only the `critique` lane. These measurements are evidence
+about that lane on these fixtures, not a full review across all lanes.
+
+Their original PR bodies are blank and their comments are empty: the available
+PR bodies contain later fix explanations, and the exact review-time snapshots
+were not retained. The frozen changed-file patches, commit ranges and short read-only
+source lookups are pinned to the original reviewed heads. The lookup snippets
+show unmodified callers, providers and public descriptions that help falsify
+the findings. Any new recording must remain distinct from the historical miss
+evidence and must use the reviewed head's source tree for additional lookups.
+
+The fixture excerpts come from `tinyhumansai/openhuman` and
+`tinyhumansai/tinymcp`, both licensed `GPL-3.0-only` at the reviewed heads;
+TinySweeper uses the same license. Cases retain the source repository, pull
+request, reviewed commit, review comment and follow-up fix as attribution in
+`provenance`. Only changed-file patches and the short source ranges needed to
+evaluate each finding are copied; the immutable source archives used to check
+those excerpts stay outside the repository.
 
 ## A failed review scores zero, not nothing
 
@@ -136,3 +210,6 @@ its own score by breaking.
 
 The labelling contract lives in [`evals/README.md`](../../../evals/README.md),
 including what the corpus does **not** measure yet.
+
+Use the [recording and 48-hour observation runbook](recording-and-48h-runbook.md)
+for bounded live recording, recall reporting, and the post-rollout metrics.

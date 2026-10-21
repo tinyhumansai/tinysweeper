@@ -196,6 +196,7 @@ pub async fn next(
             messages: messages(ctx, state, &shown),
             schema: schema(),
             schema_name: "tinysweeper_preview_step".into(),
+            reasoning_effort: None,
             max_tokens: ctx.max_tokens,
         })
         .await?;

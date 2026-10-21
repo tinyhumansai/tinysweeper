@@ -1,0 +1,22 @@
+{
+  "key": "b808fcd40f5867ea",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4577,
+    "output_tokens": 344,
+    "reasoning_tokens": 290,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00031485
+  },
+  "value": {
+    "findings": [],
+    "summary": "Need to examine the definitions of `super::credentials::candidates`, the `state` type and its `has` method, and the `Step` enum to verify that the new logic correctly provides a list of credential filenames consistent with the expectations of `plan::scan_credentials`. Without those definitions we cannot confirm whether the change preserves correct behavior or introduces type or logic errors."
+  }
+}

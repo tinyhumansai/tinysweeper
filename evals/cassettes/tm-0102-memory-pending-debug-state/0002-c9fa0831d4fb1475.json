@@ -1,0 +1,35 @@
+{
+  "key": "c9fa0831d4fb1475",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4211,
+    "output_tokens": 407,
+    "reasoning_tokens": 112,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003123
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The diff adds `MemoryPendingStore`, `PENDING_TTL_SECS`, `PendingAuthorization`, and `PendingAuthorizationStore` to the public re‑exports from the `registry` module. If those identifiers are not defined in `src/registry.rs` (or its submodule) the crate will fail to compile. Verify that these symbols exist and are public in the registry module before merging.",
+        "confidence": 0.8,
+        "existing_code": "pub use registry::{\n    AppliedServer, ConfigApplyReport, Connections, McpRegistry, MemoryPendingStore,\n    PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore, OAuthFlow,\n    ProbeOutcome,\n    REMOTE_REQUEST_TIMEOUT, SecretRef, SecretVault, ServerRef, Store, SupervisedHost, Supervisor,\n    SupervisorConfig, SupervisorEvent, TickReport,\n};",
+        "late": false,
+        "path": "crates/tinymcp/src/lib.rs",
+        "rule": "undefined-reexport",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Re-exported symbols might be undefined"
+      }
+    ],
+    "lookups": [],
+    "summary": "Pending store symbols are re-exported but may not exist in the registry module, potentially causing a compile error."
+  }
+}

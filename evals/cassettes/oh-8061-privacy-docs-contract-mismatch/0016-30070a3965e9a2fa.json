@@ -1,0 +1,35 @@
+{
+  "key": "30070a3965e9a2fa",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4116,
+    "output_tokens": 1012,
+    "reasoning_tokens": 941,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004588
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `ExternalSttProvider::new` implementation now contains `let endpoint: String = endpoint.into();` and later `endpoint: endpoint.clone(),` but the function signature does not include an `endpoint` argument. This results in an undefined variable compile error, preventing the crate from building. The constructor must be updated to accept an `endpoint: impl Into<String>` parameter (or the code using `endpoint` must be removed) so that the variable is defined before use.",
+        "confidence": 1.0,
+        "existing_code": "        let endpoint: String = endpoint.into();\n        endpoint: endpoint.clone(),",
+        "late": false,
+        "path": "crates/openhuman-core/src/voice/factory/stt_providers.rs",
+        "rule": "undefined-variable",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add missing `endpoint` parameter to constructor"
+      }
+    ],
+    "resolved": [],
+    "summary": "The change introduces a compile error because the constructor references an undefined `endpoint` parameter, making the code unsafe to merge."
+  }
+}

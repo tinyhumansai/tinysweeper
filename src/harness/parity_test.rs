@@ -42,6 +42,9 @@ fn models(base_url: &str) -> Models {
         routes: vec![],
         max_tokens: 1000,
         reasoning_effort: "high".into(),
+        reviewer_reasoning_effort: "medium".into(),
+        falsify_reasoning_effort: "low".into(),
+        summary_reasoning_effort: "low".into(),
         structured_output: StructuredOutput::Schema,
         budget_usd_per_pr: 1.0,
         budget_prices: Default::default(),
@@ -57,6 +60,7 @@ fn request(model: &str) -> ModelRequest {
         ],
         schema: crate::harness::schema::json_schema(),
         schema_name: "tinysweeper_critique".into(),
+        reasoning_effort: None,
         max_tokens: 1000,
     }
 }
@@ -283,8 +287,82 @@ async fn truncated_attempts_are_included_in_returned_usage_and_cost() {
     assert_eq!(response.usage.input_tokens, 240);
     assert_eq!(response.usage.output_tokens, 60);
     assert_eq!(response.usage.cached_tokens, 200);
+    assert_eq!(response.usage.calls_attempted, 2);
+    assert_eq!(response.usage.calls_succeeded, 2);
+    assert_eq!(response.usage.calls_errored, 0);
     assert!((response.usage.cost_usd - 0.0042).abs() < 1e-12);
     assert_eq!(gateway.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_completed_paid_attempt_is_observed_before_a_later_attempt_is_cancelled() {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct Calls(Mutex<(crate::ports::model::Usage, Vec<Duration>)>);
+
+    impl crate::ports::model::ModelCallObserver for Calls {
+        fn completed(
+            &self,
+            usage: crate::ports::model::Usage,
+            _succeeded: bool,
+            _refused: bool,
+            latency: Duration,
+        ) {
+            let mut calls = self.0.lock().unwrap();
+            calls.0.add(usage);
+            calls.1.push(latency);
+        }
+    }
+
+    let (gateway, releases) = FakeGateway::start_paused(vec![
+        Reply::completion("vendor/deep", r#"{"summary":"Lo""#, "length", usage()),
+        Reply::completion("vendor/deep", ANSWER, "stop", usage()),
+    ])
+    .await;
+    let model = adapter(&models(&gateway.base_url));
+    let calls = Arc::new(Calls::default());
+    let request = crate::ports::model::with_model_call_observer(
+        calls.clone(),
+        model.complete(request("vendor/deep")),
+    );
+    tokio::pin!(request);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut request => panic!("review completed before first response: {result:?}"),
+            _ = async { while gateway.requests().is_empty() { tokio::task::yield_now().await; } } => (),
+        }
+    })
+    .await
+    .expect("first completion reaches the fake gateway");
+    releases.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            result = &mut request => panic!("review completed before retry response: {result:?}"),
+            _ = async { while gateway.requests().len() < 2 { tokio::task::yield_now().await; } } => (),
+        }
+    })
+    .await
+    .expect("the truncation retry reaches the fake gateway");
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut request)
+            .await
+            .is_err(),
+        "the second provider response remains paused until cancellation"
+    );
+    let calls = calls.0.lock().unwrap();
+    assert_eq!(
+        calls.1.len(),
+        1,
+        "the completed dispatch is flushed at once"
+    );
+    assert_eq!(calls.0.input_tokens, 120);
+    assert_eq!(calls.0.output_tokens, 30);
+    assert_eq!(calls.0.calls_attempted, 1);
+    assert_eq!(calls.0.calls_succeeded, 1);
+    assert_eq!(calls.0.calls_errored, 0);
 }
 
 #[tokio::test]
@@ -305,6 +383,9 @@ async fn exhausted_truncation_retains_paid_usage_and_ceiling_diagnostic() {
     assert_eq!(paid.input_tokens, 360);
     assert_eq!(paid.output_tokens, 90);
     assert_eq!(paid.cached_tokens, 300);
+    assert_eq!(paid.calls_attempted, 3);
+    assert_eq!(paid.calls_succeeded, 3);
+    assert_eq!(paid.calls_errored, 0);
     assert!((paid.cost_usd - 0.0063).abs() < 1e-12);
     assert_eq!(
         error.to_string(),
@@ -487,13 +568,10 @@ async fn concurrent_affordable_completions_wait_for_reservations_to_settle() {
 }
 
 #[tokio::test]
-async fn queued_completions_still_stop_before_dispatching_past_the_hard_budget() {
-    let paid_usage = json!({"prompt_tokens":120,"completion_tokens":30,"cost":0.4});
-    let gateway = FakeGateway::start(vec![
-        Reply::completion("deep", ANSWER, "stop", paid_usage.clone()),
-        Reply::completion("deep", ANSWER, "stop", paid_usage),
-    ])
-    .await;
+async fn reported_cost_over_reservation_is_retained_and_blocks_later_admission() {
+    let paid_usage = json!({"prompt_tokens":120,"completion_tokens":600,"cost":0.09});
+    let gateway =
+        FakeGateway::start(vec![Reply::completion("deep", ANSWER, "stop", paid_usage)]).await;
     let mut models = models(&gateway.base_url);
     models.budget_prices.insert(
         "deep".into(),
@@ -503,25 +581,15 @@ async fn queued_completions_still_stop_before_dispatching_past_the_hard_budget()
             output: 150.0,
         },
     );
-    let model = adapter(&models).scoped_budget(1.0).unwrap();
-    let (first, second, third) = tokio::join!(
-        model.complete(request("deep")),
-        model.complete(request("deep")),
-        model.complete(request("deep")),
-    );
-    let outcomes = [first, second, third];
-    assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 2);
-    assert_eq!(outcomes.iter().filter(|result| result.is_err()).count(), 1);
-    let total: f64 = outcomes
-        .into_iter()
-        .filter_map(Result::ok)
-        .map(|response| response.usage.cost_usd)
-        .sum();
-    assert!((total - 0.8).abs() < 1e-12);
+    let model = adapter(&models).scoped_budget(0.1).unwrap();
+    let first = model.complete(request("deep")).await.unwrap();
+    assert!((first.usage.cost_usd - 0.09).abs() < 1e-12);
+    let second = model.complete(request("deep")).await;
+    assert!(matches!(second, Err(crate::error::Error::Budget { .. })));
     assert_eq!(
         gateway.requests().len(),
-        2,
-        "the denied call never reaches the provider"
+        1,
+        "the post-settlement refusal never reaches the provider"
     );
 }
 
@@ -574,19 +642,19 @@ async fn a_timed_out_paid_route_retains_its_unknown_charge_reservation() {
             },
         );
     }
-    let model = adapter(&models).scoped_budget(1.0).unwrap();
+    let model = adapter(&models).scoped_budget(0.15).unwrap();
     let answer = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         model.complete(request("primary")),
     )
     .await
     .expect("physical timeout reaches fallback")
-    .expect("$0.60 unknown charge plus $0.20 fallback bound fits");
+    .expect("unknown primary reservation plus the bounded fallback fits");
     assert_eq!(answer.model, "fallback");
     let second = model.complete(request("primary")).await;
     assert!(
         second.is_err(),
-        "unknown $0.60 charge cannot be refunded to admit another $0.60 bound"
+        "the timeout's unknown charge cannot be refunded to admit another call"
     );
     assert_eq!(gateway.requests().len(), 2, "denied work never dispatches");
 }
@@ -611,7 +679,7 @@ async fn canceling_a_stalled_call_is_terminal_and_releases_paid_admission() {
             },
         );
     }
-    let model: std::sync::Arc<dyn Model> = adapter(&models).scoped_budget(1.0).unwrap();
+    let model: std::sync::Arc<dyn Model> = adapter(&models).scoped_budget(0.15).unwrap();
     let running = model.clone();
     let task = tokio::spawn(async move { running.complete(request("primary")).await });
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -634,17 +702,17 @@ async fn canceling_a_stalled_call_is_terminal_and_releases_paid_admission() {
     )
     .await
     .expect("dropping the call releases admission")
-    .expect("remaining budget admits $0.20 fallback bound");
+    .expect("remaining budget admits the bounded fallback");
     assert_eq!(answer.model, "fallback");
     assert!(
         model.complete(request("primary")).await.is_err(),
-        "cancellation preserves the unknown $0.60 charge"
+        "cancellation preserves the unknown primary reservation"
     );
     assert_eq!(gateway.requests().len(), 2);
 }
 
 #[tokio::test]
-async fn fitting_paid_calls_dispatch_together_while_excess_capacity_waits() {
+async fn paid_call_capacity_refuses_excess_work_without_waiting_for_settlement() {
     let (gateway, replies) = FakeGateway::start_paused(vec![
         Reply::completion("deep", ANSWER, "stop", usage()),
         Reply::completion("deep", ANSWER, "stop", usage()),
@@ -660,16 +728,14 @@ async fn fitting_paid_calls_dispatch_together_while_excess_capacity_waits() {
             output: 100.0,
         },
     );
-    let model = adapter(&models).scoped_budget(1.0).unwrap();
-    let mut tasks = Vec::new();
+    let model = adapter(&models).scoped_budget(0.11).unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..3 {
         let model = model.clone();
-        tasks.push(tokio::spawn(async move {
-            model.complete(request("deep")).await
-        }));
+        tasks.spawn(async move { model.complete(request("deep")).await });
     }
-    // Two $0.40 bounds fit. Neither response is available, so reaching two
-    // requests proves admission is per physical call rather than per ladder.
+    // Each cold-start reservation is $0.05. Two fit; the third must refuse
+    // while both gateway replies are paused, before either reservation settles.
     let fitting = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while gateway.requests().len() < 2 {
             tokio::task::yield_now().await;
@@ -677,22 +743,48 @@ async fn fitting_paid_calls_dispatch_together_while_excess_capacity_waits() {
     })
     .await;
     if fitting.is_err() {
-        for task in &tasks {
-            task.abort();
-        }
-        replies.add_permits(3);
+        tasks.abort_all();
+        replies.add_permits(2);
     }
     fitting.expect("both fitting reservations dispatch before either settles");
+
+    let refusal = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let result = tasks
+            .join_next()
+            .await
+            .expect("one of the three calls must finish");
+        match result.expect("model task must not panic") {
+            Err(error @ crate::error::Error::Budget { .. }) => error,
+            Ok(_) => panic!("paused paid call returned before settlement"),
+            Err(error) => panic!("expected capacity refusal, got {error:?}"),
+        }
+    })
+    .await
+    .expect("third call must fail fast while the first two remain in flight");
+    assert!(matches!(refusal, crate::error::Error::Budget { .. }));
     assert_eq!(
         gateway.requests().len(),
         2,
-        "third $0.40 bound cannot dispatch against outstanding $0.80"
+        "refused third call never dispatches"
     );
-    replies.add_permits(3);
-    for task in tasks {
-        task.await
-            .unwrap()
-            .expect("affordable work completes after settlement");
+
+    replies.add_permits(2);
+    for _ in 0..2 {
+        tasks
+            .join_next()
+            .await
+            .expect("both admitted calls remain tracked")
+            .expect("model task must not panic")
+            .expect("admitted call completes after settlement");
     }
+
+    replies.add_permits(1);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        model.complete(request("deep")),
+    )
+    .await
+    .expect("retry is answered after the test releases its gateway response")
+    .expect("a fresh retry fits after the two charges settle");
     assert_eq!(gateway.requests().len(), 3);
 }

@@ -1,0 +1,33 @@
+{
+  "key": "b97926b8d5970ff5",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7619,
+    "output_tokens": 2247,
+    "reasoning_tokens": 2096,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0009427
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "If a credential file exists but cannot be read (e.g., due to permission issues or I/O failure), `std::fs::read(&path).ok()?` converts the error into `None`, causing `eligible` to return `None` without any warning. The import routine then silently skips the file, leaving the credential un‑imported and providing no feedback to the caller. Previously the code propagated the error, ensuring the migration failed loudly, which is safer. This regression can lead to lost credentials after migration.\n\n**Fix**: Handle the read error explicitly, logging a warning (or propagating the error) instead of silently discarding the file. For example:\n```rust\nlet bytes = match std::fs::read(&path) {\n    Ok(b) => zeroize::Zeroizing::new(b),\n    Err(e) => {\n        tracing::warn!(target: \"openhuman::storage\", file, error = %e, \"[layout] failed to read credential file; left in place\");\n        return None;\n    }\n};\n```",
+        "confidence": 1.0,
+        "existing_code": "let bytes = zeroize::Zeroizing::new(std::fs::read(&path).ok()?);",
+        "path": "crates/openhuman-core/src/storage/layout/credentials.rs",
+        "rule": "silent-error",
+        "severity": "high",
+        "suggestion": "let bytes = match std::fs::read(&path) {\n    Ok(b) => zeroize::Zeroizing::new(b),\n    Err(e) => {\n        tracing::warn!(target: \"openhuman::storage\", file, error = %e, \"[layout] failed to read credential file; left in place\");\n        return None;\n    }\n};",
+        "title": "Do not silently ignore read errors for credential files"
+      }
+    ],
+    "summary": "The change adds validation of credential files but silently ignores I/O errors when reading them, which can cause missing credentials without any error reported."
+  }
+}

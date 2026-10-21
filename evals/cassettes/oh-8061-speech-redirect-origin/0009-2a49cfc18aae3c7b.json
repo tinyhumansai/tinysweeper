@@ -1,0 +1,32 @@
+{
+  "key": "2a49cfc18aae3c7b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4447,
+    "output_tokens": 217,
+    "reasoning_tokens": 107,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002766
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "start": 1,
+        "why": "Determine the signature and contract of `disclose_speech_transfer` to assess if the added call is correct."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `disclose_speech_transfer` to verify correct arguments and behavior."
+  }
+}

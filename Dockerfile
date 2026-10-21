@@ -51,7 +51,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /usr/sbin/nologin tinysweeper
+    && useradd --create-home --shell /usr/sbin/nologin tinysweeper \
+    && install -d -m 0700 -o tinysweeper -g tinysweeper /var/cache/tinysweeper/repositories
 
 COPY --from=builder /out/tinysweeper /usr/local/bin/tinysweeper
 COPY presets/ /opt/tinysweeper/presets/

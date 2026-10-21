@@ -131,6 +131,13 @@ impl AppAuth {
         Self::new(app_id, &pem)
     }
 
+    /// The configured GitHub App ID used to bind recovered check identities.
+    pub fn app_id(&self) -> Result<u64> {
+        self.app_id
+            .parse()
+            .map_err(|_| Error::Forge("TINYSWEEPER_APP_ID must be numeric".into()))
+    }
+
     /// A short-lived JWT proving who the app is.
     pub fn app_jwt(&self) -> Result<String> {
         let now = SystemTime::now()

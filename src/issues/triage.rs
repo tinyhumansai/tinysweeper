@@ -89,6 +89,7 @@ pub async fn triage(
             ],
             schema: prompt::schema(),
             schema_name: "tinysweeper_issue_triage".into(),
+            reasoning_effort: None,
             max_tokens: config.models.max_tokens,
         })
         .await?;

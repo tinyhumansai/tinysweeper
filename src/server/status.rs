@@ -16,15 +16,21 @@
 //!
 //! ## One check, three states
 //!
-//! `tinysweeper/review` is created in-progress when the delivery is accepted,
-//! and the same run — by id, never a second POST — is concluded afterwards:
+//! `tinysweeper/review` is created queued when the delivery is accepted,
+//! transitioned in-place when a review permit is acquired, and concluded by
+//! the same run by ID during normal transitions:
 //!
 //! | State | Conclusion | Meaning |
 //! |---|---|---|
-//! | in progress | `None` | accepted, lanes running |
+//! | queued | `None` | accepted, waiting for a review permit |
+//! | in progress | `None` | permit acquired, lanes may run |
 //! | concluded | `Success` | the lanes ran and the review did not request changes |
 //! | concluded | `Neutral` | the lanes ran and the review requested changes |
 //! | concluded | `ActionRequired` | the review could not run — see [`failure`] |
+//!
+//! If a queued POST response is lost, the status worker first tries to recover
+//! its ID by external identity. GitHub does not enforce uniqueness for that
+//! identity, so retries cannot guarantee exactly-once remote creation.
 //!
 //! `Success` here is deliberately *not* a statement about the code. It means
 //! the review completed; whether the code is any good is what the lane checks
@@ -56,7 +62,47 @@ use crate::forge::types::{CheckConclusion, CheckRun};
 /// verdict, and a review that has not finished — or never reached the lanes at
 /// all — has no verdict to report; reusing `tinysweeper/critique` here would
 /// overwrite a real result from an earlier push with a liveness signal.
-pub const CHECK_NAME: &str = "tinysweeper/review";
+pub const CHECK_NAME: &str = crate::forge::types::REVIEW_CHECK_NAME;
+
+/// Coverage aggregated across every lane in one review proposal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReviewCoverage {
+    /// Distinct files answered by every relevant per-file lane, and total files.
+    pub files: Option<(usize, usize)>,
+    /// At least one whole-pull-request lane did not produce an answer.
+    pub unanswered_lane: bool,
+}
+
+/// Aggregate lane coverage and forge-withheld paths, then mark whole-PR gaps.
+pub fn aggregate_coverage(proposal: &crate::app::review::Proposal) -> ReviewCoverage {
+    use std::collections::BTreeSet;
+
+    let mut paths = BTreeSet::new();
+    let mut unanswered_paths = BTreeSet::new();
+    for lane in &proposal.lanes {
+        if let Some(coverage) = &lane.coverage {
+            paths.extend(coverage.reviewed.iter().cloned());
+            paths.extend(coverage.unanswered.iter().cloned());
+            unanswered_paths.extend(coverage.unanswered.iter().cloned());
+        }
+    }
+    paths.extend(proposal.unreviewed.iter().cloned());
+    unanswered_paths.extend(proposal.unreviewed.iter().cloned());
+    let files = (!paths.is_empty()).then(|| {
+        (
+            paths.len().saturating_sub(unanswered_paths.len()),
+            paths.len(),
+        )
+    });
+    let unanswered_lane = proposal
+        .lanes
+        .iter()
+        .any(|lane| lane.coverage.is_none() && !lane.unanswered.is_empty());
+    ReviewCoverage {
+        files,
+        unanswered_lane,
+    }
+}
 
 /// The check published the moment a review is accepted.
 ///
@@ -77,6 +123,26 @@ pub fn in_progress(head_sha: &str) -> CheckRun {
                   on the code, and it will conclude either way — including if the review \
                   fails, which it will say explicitly rather than disappearing."
             .to_string(),
+        status: None,
+        external_id: None,
+        images: vec![],
+    }
+}
+
+/// The check published for an accepted review before it has a review permit.
+///
+/// The pinned head and deterministic external ID let the durable scheduler
+/// recover the same check after a process restart. This helper does not grant
+/// review ownership or authorize any paid work.
+pub fn queued(head_sha: &str, reviews_ahead: usize, external_id: &str) -> CheckRun {
+    CheckRun {
+        name: CHECK_NAME.to_string(),
+        head_sha: head_sha.to_string(),
+        conclusion: None,
+        status: Some(crate::forge::types::CheckRunStatus::Queued),
+        external_id: Some(external_id.to_string()),
+        title: format!("Queued — {reviews_ahead} reviews ahead"),
+        summary: "tinysweeper accepted this pull request for review. It is waiting for a review permit; no review work has started yet.".into(),
         images: vec![],
     }
 }
@@ -90,13 +156,54 @@ pub fn in_progress(head_sha: &str) -> CheckRun {
 /// beside a Changes Requested review. `findings` is rendered so the check is
 /// worth reading on its own, and because it is the one number that tells a
 /// contributor whether to go looking at the inline comments.
-pub fn completed(head_sha: &str, findings: usize, changes_requested: bool) -> CheckRun {
+pub fn completed(
+    head_sha: &str,
+    findings: usize,
+    changes_requested: bool,
+    coverage: ReviewCoverage,
+) -> CheckRun {
     let counted = match findings {
         0 => "nothing to report".to_string(),
         1 => "1 finding".to_string(),
         many => format!("{many} findings"),
     };
-    let (conclusion, title) = if changes_requested {
+    let (conclusion, title) = if let Some((reviewed, total)) = coverage.files {
+        let not_reviewed = total.saturating_sub(reviewed);
+        if changes_requested && coverage.unanswered_lane {
+            (
+                CheckConclusion::Neutral,
+                format!("Changes requested — review incomplete; {reviewed}/{total} files reviewed"),
+            )
+        } else if coverage.unanswered_lane {
+            (
+                CheckConclusion::Neutral,
+                format!(
+                    "Review incomplete — lane unanswered; {reviewed} of {total} files reviewed"
+                ),
+            )
+        } else if changes_requested {
+            (
+                CheckConclusion::Neutral,
+                format!(
+                    "Changes requested — {reviewed} of {total} files; {not_reviewed} not reviewed"
+                ),
+            )
+        } else {
+            (
+                if not_reviewed > 0 {
+                    CheckConclusion::Neutral
+                } else {
+                    CheckConclusion::Success
+                },
+                format!("Reviewed {reviewed} of {total} files — {not_reviewed} not reviewed"),
+            )
+        }
+    } else if coverage.unanswered_lane {
+        (
+            CheckConclusion::Neutral,
+            "Review incomplete — a lane did not respond".to_string(),
+        )
+    } else if changes_requested {
         (
             CheckConclusion::Neutral,
             format!("Reviewed — changes requested, {counted}"),
@@ -116,6 +223,8 @@ pub fn completed(head_sha: &str, findings: usize, changes_requested: bool) -> Ch
              tinysweeper ran, nothing more — each lane publishes its own check with its \
              own verdict, and those are what gate the merge."
         ),
+        status: None,
+        external_id: None,
         images: vec![],
     }
 }
@@ -142,6 +251,25 @@ pub fn not_reviewed(head_sha: &str) -> CheckRun {
                   Nothing is wrong with the code, and nothing was checked. Use the \
                   repository's **Manual review** workflow to review it anyway."
             .to_string(),
+        status: None,
+        external_id: None,
+        images: vec![],
+    }
+}
+
+/// Conclude a queued review whose completion could not be confirmed.
+///
+/// A failed in-progress status update does not prove that paid review work
+/// never began, so this neutral result makes no claim about what was checked.
+pub fn queued_review_incomplete(head_sha: &str, external_id: Option<&str>) -> CheckRun {
+    CheckRun {
+        name: CHECK_NAME.to_string(),
+        head_sha: head_sha.to_string(),
+        conclusion: Some(CheckConclusion::Neutral),
+        title: "Review incomplete".to_string(),
+        summary: "tinysweeper could not confirm completion of this queued review. Work may have started before the run stopped. This status makes no judgment about the code.".to_string(),
+        status: None,
+        external_id: external_id.map(str::to_string),
         images: vec![],
     }
 }
@@ -149,6 +277,248 @@ pub fn not_reviewed(head_sha: &str) -> CheckRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::review::LaneProposal;
+    use crate::config::types::LaneId;
+    use crate::forge::MockForge;
+    use crate::forge::types::CheckConclusion;
+
+    #[test]
+    fn queued_check_is_pinned_and_names_its_durable_wait_position() {
+        let check = queued("head-123", 3, "review:job-123:head-123");
+
+        assert_eq!(check.name, CHECK_NAME);
+        assert_eq!(check.head_sha, "head-123");
+        assert_eq!(check.conclusion, None);
+        assert_eq!(
+            check.status,
+            Some(crate::forge::types::CheckRunStatus::Queued)
+        );
+        assert_eq!(
+            check.external_id.as_deref(),
+            Some("review:job-123:head-123")
+        );
+        assert_eq!(check.title, "Queued — 3 reviews ahead");
+    }
+
+    #[test]
+    fn existing_pending_check_helper_keeps_legacy_in_progress_default() {
+        let check = in_progress("head-123");
+
+        assert_eq!(check.status, None);
+        assert_eq!(check.conclusion, None);
+    }
+
+    fn file_lane(id: &str, reviewed: &[&str], unanswered: &[&str]) -> LaneProposal {
+        LaneProposal {
+            lane: match id {
+                "critique" => LaneId::Critique,
+                "security" => LaneId::Security,
+                "tests" => LaneId::Tests,
+                _ => panic!("unexpected lane id {id}"),
+            },
+            check_name: format!("tinysweeper/{id}"),
+            conclusion: CheckConclusion::Neutral,
+            summary: String::new(),
+            completed: !reviewed.is_empty(),
+            findings: vec![],
+            blocking_findings: Some(vec![]),
+            noted: vec![],
+            context_degraded: false,
+            resolved: vec![],
+            pending: vec![],
+            skipped: None,
+            deduped: 0,
+            highest_severity: None,
+            usage: Default::default(),
+            models: vec![],
+            unanswered: unanswered.iter().map(|path| (*path).to_string()).collect(),
+            omissions: vec![],
+            coverage: Some(crate::lanes::FileCoverage {
+                reviewed: reviewed.iter().map(|path| (*path).to_string()).collect(),
+                unanswered: unanswered.iter().map(|path| (*path).to_string()).collect(),
+            }),
+            overflow: vec![],
+        }
+    }
+
+    fn whole_pr_lane_unanswered(id: &str, gap: &str) -> LaneProposal {
+        let mut lane = file_lane(id, &[], &[]);
+        lane.coverage = None;
+        lane.unanswered = vec![gap.to_string()];
+        lane
+    }
+
+    fn proposal(lanes: Vec<LaneProposal>, unreviewed: &[&str]) -> crate::app::review::Proposal {
+        crate::app::review::Proposal {
+            version: crate::app::review::PROPOSAL_VERSION,
+            repo: "acme/widget".into(),
+            number: 1,
+            head_sha: "abc".into(),
+            lanes,
+            overview: None,
+            wireframe: None,
+            summary: None,
+            prior_findings: vec![],
+            unreviewed: unreviewed.iter().map(|path| (*path).to_string()).collect(),
+            partial_review: None,
+            skipped: None,
+            cost_usd: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0,
+            embed_tokens: 0,
+            models: vec![],
+            completion_accounting: None,
+            logical_usage: None,
+            threads: Default::default(),
+        }
+    }
+
+    async fn publish_aggregate(
+        proposal: &crate::app::review::Proposal,
+        head: &str,
+    ) -> crate::forge::types::CheckRun {
+        use crate::ports::forge::ForgeWrite;
+
+        let forge = MockForge::new();
+        let repo = crate::forge::types::RepoId::parse("acme/widget").unwrap();
+        forge
+            .publish_check(
+                &repo,
+                completed(head, 0, false, aggregate_coverage(proposal)),
+            )
+            .await
+            .expect("publishes aggregate check");
+        forge.checks().remove(CHECK_NAME).unwrap()
+    }
+
+    #[tokio::test]
+    async fn aggregate_reports_paths_missed_by_any_required_lane() {
+        let files: Vec<String> = (0..10).map(|n| format!("src/{n}.rs")).collect();
+        let all: Vec<_> = files.iter().map(String::as_str).collect();
+        let security_reviewed: Vec<_> = all[..8].to_vec();
+        let security_missing: Vec<_> = all[8..].to_vec();
+        let proposal = proposal(
+            vec![
+                file_lane("critique", &all, &[]),
+                file_lane("security", &security_reviewed, &security_missing),
+            ],
+            &[],
+        );
+
+        let check = publish_aggregate(&proposal, "abc").await;
+
+        assert_eq!(check.title, "Reviewed 8 of 10 files — 2 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[tokio::test]
+    async fn aggregate_unions_distinct_unanswered_paths_across_lanes() {
+        let files: Vec<String> = (0..10).map(|n| format!("src/{n}.rs")).collect();
+        let all: Vec<_> = files.iter().map(String::as_str).collect();
+        let first_reviewed: Vec<_> = all[1..].to_vec();
+        let second_reviewed: Vec<_> = all[..9].to_vec();
+        let proposal = proposal(
+            vec![
+                file_lane("critique", &first_reviewed, &[all[0]]),
+                file_lane("security", &second_reviewed, &[all[9]]),
+            ],
+            &[],
+        );
+
+        let check = publish_aggregate(&proposal, "abc").await;
+
+        assert_eq!(check.title, "Reviewed 8 of 10 files — 2 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[tokio::test]
+    async fn successful_lanes_keep_their_distinct_file_scopes() {
+        let proposal = proposal(
+            vec![
+                file_lane("critique", &["src/a.rs", "README.md"], &[]),
+                file_lane("security", &["src/a.rs"], &[]),
+            ],
+            &[],
+        );
+
+        let check = publish_aggregate(&proposal, "abc").await;
+
+        assert_eq!(check.title, "Reviewed 2 of 2 files — 0 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Success));
+    }
+
+    #[tokio::test]
+    async fn forge_withheld_files_are_included_in_overall_coverage() {
+        let proposal = proposal(
+            vec![file_lane("critique", &["src/a.rs"], &[])],
+            &["src/b.rs"],
+        );
+
+        let check = publish_aggregate(&proposal, "abc").await;
+
+        assert_eq!(check.title, "Reviewed 1 of 2 files — 1 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[tokio::test]
+    async fn forge_withheld_paths_count_without_file_lanes_and_deduplicate() {
+        let no_lanes = proposal(vec![], &["src/b.rs"]);
+        let check = publish_aggregate(&no_lanes, "abc").await;
+        assert_eq!(check.title, "Reviewed 0 of 1 files — 1 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+
+        let duplicate_gap = proposal(
+            vec![file_lane("critique", &["src/a.rs"], &["src/b.rs"])],
+            &["src/b.rs"],
+        );
+        let check = publish_aggregate(&duplicate_gap, "def").await;
+        assert_eq!(check.title, "Reviewed 1 of 2 files — 1 not reviewed");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[tokio::test]
+    async fn whole_pr_lane_gap_survives_complete_file_lane_coverage() {
+        let files: Vec<String> = (0..10).map(|n| format!("src/{n}.rs")).collect();
+        let all: Vec<_> = files.iter().map(String::as_str).collect();
+        let proposal = proposal(
+            vec![
+                file_lane("critique", &all, &[]),
+                whole_pr_lane_unanswered("tests", "tinysweeper/tests"),
+            ],
+            &[],
+        );
+
+        let check = publish_aggregate(&proposal, "abc").await;
+
+        assert_eq!(
+            check.title,
+            "Review incomplete — lane unanswered; 10 of 10 files reviewed"
+        );
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[test]
+    fn changes_requested_remains_visible_when_coverage_is_incomplete() {
+        let coverage = ReviewCoverage {
+            files: Some((8, 10)),
+            unanswered_lane: true,
+        };
+        let check = completed("abc", 1, true, coverage);
+
+        assert!(
+            check.title.starts_with("Changes requested"),
+            "{}",
+            check.title
+        );
+        assert!(
+            check.title.len() <= 80,
+            "{} chars: {}",
+            check.title.len(),
+            check.title
+        );
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
 
     #[test]
     fn the_starting_check_is_pending_so_nothing_merges_underneath_it() {
@@ -173,7 +543,10 @@ mod tests {
         // the others.
         let err = crate::error::Error::Model("gateway returned 403".into());
         assert_eq!(in_progress("abc123").name, CHECK_NAME);
-        assert_eq!(completed("abc123", 0, false).name, CHECK_NAME);
+        assert_eq!(
+            completed("abc123", 0, false, ReviewCoverage::default()).name,
+            CHECK_NAME
+        );
         assert_eq!(
             crate::server::failure::check_run("abc123", &err).name,
             CHECK_NAME
@@ -182,7 +555,7 @@ mod tests {
 
     #[test]
     fn completing_is_terminal_and_does_not_block() {
-        let check = completed("abc123", 3, false);
+        let check = completed("abc123", 3, false, ReviewCoverage::default());
         assert_eq!(check.conclusion, Some(CheckConclusion::Success));
         assert!(!check.is_in_progress());
         assert!(
@@ -196,7 +569,7 @@ mod tests {
         // The trap this check would otherwise set: a green `tinysweeper/review`
         // sitting next to a red `tinysweeper/security`, read as a pass.
         for findings in [0, 1, 7] {
-            let check = completed("abc123", findings, false);
+            let check = completed("abc123", findings, false, ReviewCoverage::default());
             assert!(
                 check.summary.contains("does not mean the code passed"),
                 "a liveness pass must disclaim being a verdict"
@@ -228,7 +601,7 @@ mod tests {
         // pushed again.
         let err = crate::error::Error::Model("gateway returned 403".into());
         for check in [
-            completed("abc123", 0, false),
+            completed("abc123", 0, false, ReviewCoverage::default()),
             not_reviewed("abc123"),
             crate::server::failure::check_run("abc123", &err),
         ] {
@@ -242,7 +615,7 @@ mod tests {
 
     #[test]
     fn a_review_that_requested_changes_never_concludes_green() {
-        let check = completed("abc123", 2, true);
+        let check = completed("abc123", 2, true, ReviewCoverage::default());
         assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
         assert!(check.title.contains("changes requested"), "{}", check.title);
         assert!(check.title.contains("2 findings"), "{}", check.title);
@@ -261,11 +634,99 @@ mod tests {
     #[test]
     fn the_title_counts_findings_and_gets_the_plural_right() {
         assert!(
-            completed("abc", 0, false)
+            completed("abc", 0, false, ReviewCoverage::default())
                 .title
                 .contains("nothing to report")
         );
-        assert!(completed("abc", 1, false).title.contains("1 finding"));
-        assert!(completed("abc", 4, false).title.contains("4 findings"));
+        assert!(
+            completed("abc", 1, false, ReviewCoverage::default())
+                .title
+                .contains("1 finding")
+        );
+        assert!(
+            completed("abc", 4, false, ReviewCoverage::default())
+                .title
+                .contains("4 findings")
+        );
+    }
+
+    #[test]
+    fn partial_coverage_title_never_says_nothing_to_report() {
+        let check = completed(
+            "abc",
+            0,
+            false,
+            ReviewCoverage {
+                files: Some((8, 10)),
+                unanswered_lane: false,
+            },
+        );
+        assert_eq!(check.title, "Reviewed 8 of 10 files — 2 not reviewed");
+    }
+
+    #[test]
+    fn an_unanswered_whole_pr_lane_never_uses_the_empty_review_title() {
+        let check = completed(
+            "abc",
+            0,
+            false,
+            ReviewCoverage {
+                files: None,
+                unanswered_lane: true,
+            },
+        );
+        assert_eq!(check.title, "Review incomplete — a lane did not respond");
+        assert_eq!(check.conclusion, Some(CheckConclusion::Neutral));
+    }
+
+    #[tokio::test]
+    async fn the_mock_forge_receives_partial_and_unanswered_review_titles() {
+        use crate::ports::forge::ForgeWrite;
+
+        let forge = crate::forge::MockForge::new();
+        let repo = crate::forge::types::RepoId::parse("acme/widget").unwrap();
+        forge
+            .publish_check(
+                &repo,
+                completed(
+                    "abc",
+                    0,
+                    false,
+                    ReviewCoverage {
+                        files: Some((8, 10)),
+                        unanswered_lane: false,
+                    },
+                ),
+            )
+            .await
+            .expect("publishes partial status");
+        assert_eq!(
+            forge.checks()[CHECK_NAME].title,
+            "Reviewed 8 of 10 files — 2 not reviewed"
+        );
+        forge
+            .publish_check(
+                &repo,
+                completed(
+                    "def",
+                    0,
+                    false,
+                    ReviewCoverage {
+                        files: None,
+                        unanswered_lane: true,
+                    },
+                ),
+            )
+            .await
+            .expect("publishes unanswered status");
+        let checks = forge.checks();
+        assert_eq!(
+            checks[CHECK_NAME].title,
+            "Review incomplete — a lane did not respond"
+        );
+        assert_eq!(
+            checks[CHECK_NAME].head_sha, "def",
+            "the latest run replaces the earlier one"
+        );
     }
 }

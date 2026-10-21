@@ -92,6 +92,708 @@ fn config() -> Config {
         .unwrap()
 }
 
+fn cassette_request(prompt: &str) -> crate::ports::model::ModelRequest {
+    use crate::ports::model::{Message, ModelRequest};
+
+    ModelRequest {
+        model: "test/review-only".into(),
+        messages: vec![Message::user(prompt)],
+        schema: serde_json::json!({"type": "object"}),
+        schema_name: "test_response".into(),
+        reasoning_effort: None,
+        max_tokens: 128,
+    }
+}
+
+#[tokio::test]
+async fn a_short_recording_archives_the_previous_cassette_tail() {
+    use crate::ports::model::Model;
+
+    let dir = tempfile::tempdir().expect("temporary corpus");
+    let cassette_dir = dir.path().join("cassettes/ts-0001");
+    let audit_dir = dir.path().join("recording-attempts/ts-0001");
+    let old_requests = ["old-1", "old-2", "old-3"];
+
+    let old_recorder =
+        crate::harness::cassette::Cassette::record(Arc::new(MockModel::silent()), &cassette_dir);
+    for prompt in old_requests {
+        old_recorder
+            .complete(cassette_request(prompt))
+            .await
+            .expect("old response recorded");
+    }
+    assert_eq!(old_recorder.flush().expect("old takes flushed"), 3);
+
+    let reservation = crate::eval::recording_budget::Reservation::begin(&audit_dir, 1, 1)
+        .expect("new attempt admitted");
+    let reservation_id = reservation.id().to_owned();
+    archive_prior_takes(&cassette_dir, reservation.directory(), reservation.id())
+        .expect("prior takes archived");
+    let new_recorder =
+        crate::harness::cassette::Cassette::record(Arc::new(MockModel::silent()), &cassette_dir);
+    new_recorder
+        .complete(cassette_request("new-only"))
+        .await
+        .expect("new response recorded");
+    assert_eq!(new_recorder.flush().expect("new take flushed"), 1);
+    reservation.finish(1).expect("attempt count finalized");
+
+    let replay = crate::harness::cassette::Cassette::replay(
+        &cassette_dir,
+        crate::harness::cassette::Mode::Strict,
+    )
+    .expect("strict replay loads only the new take");
+    replay
+        .complete(cassette_request("new-only"))
+        .await
+        .expect("the current take replays");
+    assert!(replay.complete(cassette_request("old-3")).await.is_err());
+    assert_eq!(replay.strict_misses(), 1);
+
+    let archived = std::fs::read_dir(audit_dir.join("prior-takes").join(reservation_id))
+        .expect("attempt archive exists")
+        .count();
+    assert_eq!(archived, 3, "all old takes remain auditable");
+}
+
+#[test]
+fn live_recording_candidate_pins_provider_price_and_output_bounds() {
+    let loaded = crate::config::load_validated(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        Some(std::path::Path::new("evals/recording.deepinfra.toml")),
+    )
+    .expect("recording candidate validates");
+    let config = loaded.config;
+    assert_eq!(config.models.scan, "deepseek/deepseek-v3.2");
+    assert_eq!(config.models.deep, config.models.scan);
+    assert_eq!(config.models.flash, config.models.scan);
+    assert!(config.models.fallback.is_empty());
+    assert_eq!(config.models.provider.order, ["deepinfra"]);
+    assert!(!config.models.provider.allow_fallbacks);
+    assert!(!config.models.provider.last_resort_unpinned);
+    assert!(!config.models.agentic_reviewers);
+    assert_eq!(config.models.max_tokens, 4096);
+    assert_eq!(config.models.reasoning_effort, "off");
+    assert_eq!(config.models.reviewer_reasoning_effort, "off");
+    assert_eq!(config.models.falsify_reasoning_effort, "off");
+    assert_eq!(config.models.summary_reasoning_effort, "off");
+    let price = config
+        .models
+        .budget_prices
+        .get("deepseek/deepseek-v3.2")
+        .expect("verified price bound");
+    assert_eq!(
+        (price.input, price.cached, price.output),
+        (0.26, 0.26, 0.38)
+    );
+}
+
+#[test]
+fn continuation_candidate_pins_gpt_oss_novita_and_its_recording_limits() {
+    let loaded = crate::config::load_validated(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        Some(std::path::Path::new("evals/recording.gptoss-novita.toml")),
+    )
+    .expect("continuation candidate validates");
+    let config = loaded.config;
+    assert_eq!(config.models.scan, "openai/gpt-oss-120b");
+    assert_eq!(config.models.deep, config.models.scan);
+    assert_eq!(config.models.flash, config.models.scan);
+    assert!(config.models.fallback.is_empty());
+    assert!(config.models.routes.is_empty());
+    assert_eq!(config.models.provider.order, ["novita"]);
+    assert!(!config.models.provider.allow_fallbacks);
+    assert!(!config.models.provider.last_resort_unpinned);
+    assert!(config.models.provider.unpinned_vendors.is_empty());
+    assert!(!config.models.agentic_reviewers);
+    assert_eq!(config.models.max_tokens, 12000);
+    assert_eq!(config.models.reasoning_effort, "low");
+    assert_eq!(config.models.reviewer_reasoning_effort, "low");
+    assert_eq!(config.models.falsify_reasoning_effort, "low");
+    assert_eq!(config.models.summary_reasoning_effort, "low");
+    assert_eq!(config.models.budget_usd_per_pr, 0.48);
+    let price = config
+        .models
+        .budget_prices
+        .get("openai/gpt-oss-120b")
+        .expect("verified reservation rate");
+    assert_eq!(
+        (price.input, price.cached, price.output),
+        (0.05, 0.05, 0.25)
+    );
+}
+
+#[derive(Clone)]
+struct BudgetCaptureModel {
+    roots: Arc<std::sync::Mutex<Vec<f64>>>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    fail_without_usage: bool,
+}
+
+#[derive(Clone)]
+struct HiddenRetryModel {
+    control: Option<Arc<dyn crate::ports::model_execution::ModelExecutionControl>>,
+    physical_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::model::Model for HiddenRetryModel {
+    async fn complete(
+        &self,
+        _request: crate::ports::model::ModelRequest,
+    ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+        use crate::ports::model_execution::{
+            ModelExecutionTerminal, ModelExecutionTerminalOutcome, ModelExecutionTerminalUsage,
+        };
+
+        let control = self.control.as_ref().expect("physical control bound");
+        for _ in 0..100 {
+            let permit = match control.acquire().await {
+                Ok(permit) => permit,
+                Err(refusal) => {
+                    return Err(crate::error::Error::ModelExecutionRefused {
+                        refusal,
+                        usage: None,
+                        accounting_complete: true,
+                    });
+                }
+            };
+            permit
+                .mark_dispatched()
+                .expect("reserved test dispatch is admitted");
+            self.physical_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            control.on_terminal(ModelExecutionTerminal {
+                requested_model: "deepseek/deepseek-v3.2".into(),
+                answered_model: Some("deepseek/deepseek-v3.2".into()),
+                outcome: ModelExecutionTerminalOutcome::Succeeded,
+                refused: false,
+                usage: Some(ModelExecutionTerminalUsage {
+                    input_tokens: 10,
+                    output_tokens: 10,
+                    reasoning_tokens: 0,
+                    cached_tokens: 0,
+                    cost_usd: Some(0.0001),
+                }),
+            });
+        }
+        Ok(crate::ports::model::ModelResponse {
+            value: json!({"summary": "No actionable findings.", "findings": []}),
+            model: "deepseek/deepseek-v3.2".into(),
+            usage: crate::ports::model::Usage::default(),
+        })
+    }
+
+    fn complete_reports_physical_calls(&self) -> bool {
+        true
+    }
+
+    fn reports_raw_completion_usage(&self) -> bool {
+        true
+    }
+
+    fn with_review_budget(&self, _limit_usd: f64) -> Option<Arc<dyn crate::ports::model::Model>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn with_execution_control(
+        &self,
+        control: Arc<dyn crate::ports::model_execution::ModelExecutionControl>,
+    ) -> Option<Arc<dyn crate::ports::model::Model>> {
+        Some(Arc::new(Self {
+            control: Some(control),
+            physical_calls: self.physical_calls.clone(),
+        }))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ports::model::Model for BudgetCaptureModel {
+    async fn complete(
+        &self,
+        _request: crate::ports::model::ModelRequest,
+    ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_without_usage {
+            return Err(crate::error::Error::Model("unreported test charge".into()));
+        }
+        Ok(crate::ports::model::ModelResponse {
+            value: json!({"summary": "No actionable findings.", "findings": []}),
+            model: "test/budget-capture".into(),
+            usage: crate::ports::model::Usage::default(),
+        })
+    }
+
+    fn with_review_budget(&self, limit_usd: f64) -> Option<Arc<dyn crate::ports::model::Model>> {
+        self.roots.lock().expect("budget roots").push(limit_usd);
+        Some(Arc::new(self.clone()))
+    }
+}
+
+fn two_case_corpus(directory: &tempfile::TempDir) -> crate::eval::corpus::Corpus {
+    let mut corpus = load(directory.path()).expect("loads one-case corpus");
+    let mut second = corpus.cases[0].clone();
+    second.case.id = "ts-0002".into();
+    corpus.cases.push(second);
+    corpus
+}
+
+#[tokio::test]
+async fn hidden_physical_retries_share_the_recording_cap_and_failed_attempt_audit() {
+    let dir = corpus_dir(EXPECTATION);
+    let corpus = load(dir.path()).expect("loads one-case corpus");
+    let physical_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let model = Arc::new(HiddenRetryModel {
+        control: None,
+        physical_calls: physical_calls.clone(),
+    });
+    let mut config = config();
+    config.models.budget_usd_per_pr = 0.5;
+
+    run(
+        &corpus,
+        &config,
+        Some(model),
+        &RunOptions {
+            out: dir.path().join("runs/hidden-retries"),
+            record: true,
+            max_cost_usd: 0.5,
+            max_physical_calls_per_case: Some(8),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("persists bounded failed review");
+
+    assert_eq!(physical_calls.load(std::sync::atomic::Ordering::SeqCst), 8);
+    let proposal: crate::app::review::Proposal = serde_json::from_slice(
+        &std::fs::read(dir.path().join("runs/hidden-retries/ts-0001/proposal.json"))
+            .expect("bounded review proposal exists"),
+    )
+    .expect("proposal decodes");
+    assert!(
+        proposal.skipped.is_some() || !proposal.unreviewed.is_empty(),
+        "call-limit refusal must remain visibly incomplete, never look like a clean review"
+    );
+    let audit: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            corpus
+                .root
+                .join("recording-attempts/ts-0001/recording-attempts.json"),
+        )
+        .expect("attempt audit exists"),
+    )
+    .expect("valid attempt audit");
+    assert_eq!(audit["reservations"][0]["reserved_calls"], 8);
+    assert_eq!(audit["reservations"][0]["actual_calls"], 8);
+}
+
+#[tokio::test]
+async fn recording_rerun_uses_only_the_remaining_cumulative_attempt_allowance() {
+    let dir = corpus_dir(EXPECTATION);
+    let corpus = load(dir.path()).expect("loads one-case corpus");
+    let audit_dir = corpus.root.join("recording-attempts/ts-0001");
+    let first = crate::eval::recording_budget::Reservation::begin(&audit_dir, 8, 56)
+        .expect("first invocation reserves its initial allowance");
+    first
+        .finish(8)
+        .expect("first invocation audit is completed");
+
+    let cassette_dir = corpus.cases[0].cassette_dir(&corpus.root);
+    std::fs::create_dir_all(&cassette_dir).expect("cassette directory");
+    let stale_tail = cassette_dir.join("9999-stale-tail.json");
+    std::fs::write(&stale_tail, "stale take from an earlier attempt")
+        .expect("seed stale cassette tail");
+
+    let physical_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let model = Arc::new(HiddenRetryModel {
+        control: None,
+        physical_calls: physical_calls.clone(),
+    });
+    let mut config = config();
+    config.models.budget_usd_per_pr = 0.5;
+
+    let outcome = run(
+        &corpus,
+        &config,
+        Some(model),
+        &RunOptions {
+            out: dir.path().join("runs/cumulative-retry"),
+            record: true,
+            max_cost_usd: 0.5,
+            max_physical_calls_per_case: Some(40),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("rerun is admitted against the persisted remainder");
+
+    assert_eq!(physical_calls.load(std::sync::atomic::Ordering::SeqCst), 32);
+    let audit: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(audit_dir.join("recording-attempts.json")).expect("attempt audit exists"),
+    )
+    .expect("valid attempt audit");
+    assert_eq!(audit["reservations"][0]["actual_calls"], 8);
+    assert_eq!(audit["reservations"][1]["reserved_calls"], 32);
+    assert_eq!(audit["reservations"][1]["actual_calls"], 32);
+    assert!(
+        !stale_tail.exists(),
+        "old takes must leave the replay directory"
+    );
+    assert_eq!(
+        outcome.execution_limits.max_physical_calls_per_case,
+        Some(40),
+        "the operator's requested cumulative ceiling remains visible"
+    );
+    assert_eq!(
+        outcome.execution_limits.effective_case_budgets[0].max_physical_calls_per_case,
+        Some(32),
+        "identity records the allowance actually admitted after prior attempts"
+    );
+    let limits = serde_json::to_value(&outcome.execution_limits).expect("limits serialize");
+    assert_eq!(limits["max_physical_calls_per_case"], 40);
+    assert_eq!(
+        limits["effective_case_budgets"][0]["max_physical_calls_per_case"],
+        32
+    );
+    let archived = audit_dir.join("prior-takes");
+    assert!(
+        archived.exists(),
+        "replaced takes retain attempt provenance"
+    );
+    assert!(
+        std::fs::read_dir(archived)
+            .expect("archive listing")
+            .next()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_recording_ceiling_cannot_be_replenished_by_rerunning() {
+    for ceiling in [8, 32] {
+        let dir = corpus_dir(EXPECTATION);
+        let corpus = load(dir.path()).expect("loads one-case corpus");
+        let physical_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let model = Arc::new(HiddenRetryModel {
+            control: None,
+            physical_calls: physical_calls.clone(),
+        });
+        let mut config = config();
+        config.models.budget_usd_per_pr = 0.5;
+        let requested_ceiling = Some(ceiling);
+
+        run(
+            &corpus,
+            &config,
+            Some(model.clone()),
+            &RunOptions {
+                out: dir.path().join("runs/cumulative-first"),
+                record: true,
+                max_cost_usd: 0.5,
+                max_physical_calls_per_case: requested_ceiling,
+                ..RunOptions::default()
+            },
+        )
+        .await
+        .expect("initial selected allowance is admitted");
+        assert_eq!(
+            physical_calls.load(std::sync::atomic::Ordering::SeqCst),
+            ceiling
+        );
+        let denied_tail = corpus.cases[0]
+            .cassette_dir(&corpus.root)
+            .join("denied-attempt-must-not-archive.json");
+        std::fs::create_dir_all(denied_tail.parent().expect("cassette parent"))
+            .expect("create active cassette directory");
+        std::fs::write(&denied_tail, "still active until reservation succeeds")
+            .expect("seed active take before denied rerun");
+
+        let second = run(
+            &corpus,
+            &config,
+            Some(model),
+            &RunOptions {
+                out: dir.path().join("runs/cumulative-second"),
+                record: true,
+                max_cost_usd: 0.5,
+                max_physical_calls_per_case: requested_ceiling,
+                ..RunOptions::default()
+            },
+        )
+        .await;
+        assert!(
+            second.is_err(),
+            "a rerun cannot restore the selected {ceiling}-call allowance"
+        );
+        assert_eq!(
+            physical_calls.load(std::sync::atomic::Ordering::SeqCst),
+            ceiling
+        );
+        assert!(
+            denied_tail.exists(),
+            "an exhausted reservation must not alter active takes"
+        );
+    }
+}
+
+#[tokio::test]
+async fn recording_binds_each_case_to_its_share_of_the_global_cost_ceiling() {
+    let dir = corpus_dir(EXPECTATION);
+    let mut corpus = two_case_corpus(&dir);
+    for case in &mut corpus.cases {
+        case.case.budget.max_cost_usd = 0.5;
+    }
+    let roots = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let model = Arc::new(BudgetCaptureModel {
+        roots: roots.clone(),
+        calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        fail_without_usage: false,
+    });
+    let mut config = config();
+    config.models.budget_usd_per_pr = 1.0;
+
+    run(
+        &corpus,
+        &config,
+        Some(model),
+        &RunOptions {
+            out: dir.path().join("runs/budget-bound"),
+            record: true,
+            max_cost_usd: 0.5,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("records both bounded cases");
+
+    let roots = roots.lock().expect("budget roots");
+    assert_eq!(roots.len(), 2, "each case binds one monetary root");
+    assert!(roots.iter().all(|limit| (*limit - 0.25).abs() < 1e-12));
+}
+
+#[tokio::test]
+async fn an_unreported_case_charge_stops_later_recording_cases() {
+    let dir = corpus_dir(EXPECTATION);
+    let mut corpus = two_case_corpus(&dir);
+    for case in &mut corpus.cases {
+        case.case.budget.max_cost_usd = 0.5;
+    }
+    let roots = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let model = Arc::new(BudgetCaptureModel {
+        roots: roots.clone(),
+        calls: calls.clone(),
+        fail_without_usage: true,
+    });
+    let mut config = config();
+    config.models.budget_usd_per_pr = 1.0;
+
+    let result = run(
+        &corpus,
+        &config,
+        Some(model),
+        &RunOptions {
+            out: dir.path().join("runs/unknown-charge"),
+            record: true,
+            max_cost_usd: 0.5,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("persists the failed first case and stops");
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(roots.lock().expect("budget roots").len(), 1);
+    assert_eq!(result.scores.len(), 1);
+    assert_eq!(result.skipped, vec!["ts-0002"]);
+}
+
+#[tokio::test]
+async fn recording_from_an_arbitrary_tree_does_not_claim_fixture_history() {
+    use crate::ports::model::{ModelRequest, ModelResponse, Usage};
+    use crate::ports::tree::{Found, Lookup, TreeQuery, TreeReader};
+
+    struct HistoryProbe {
+        history: Arc<std::sync::Mutex<Vec<Found>>>,
+        falsification_keys: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::model::Model for HistoryProbe {
+        async fn complete(&self, request: ModelRequest) -> crate::error::Result<ModelResponse> {
+            if request.schema_name == "tinysweeper_falsify" {
+                self.falsification_keys
+                    .lock()
+                    .expect("falsification key capture")
+                    .push(crate::harness::cassette::key(&request));
+            }
+            Ok(ModelResponse {
+                value: json!({"incorrect": []}),
+                model: "test/history-probe".into(),
+                usage: Usage::default(),
+            })
+        }
+
+        async fn review(
+            &self,
+            _request: ModelRequest,
+            tree: &dyn TreeReader,
+            _policy: &crate::config::types::LookupPolicy,
+        ) -> crate::error::Result<ModelResponse> {
+            let _ = tree
+                .lookup(&Lookup::Read {
+                    path: "src/lib.rs".into(),
+                    start: Some(1),
+                    end: Some(2),
+                })
+                .await?;
+            let _ = tree
+                .explore(&TreeQuery::Symbol {
+                    symbol: "from_another_revision".into(),
+                    limit: 3,
+                })
+                .await?;
+            let found = tree
+                .explore(&TreeQuery::History {
+                    commit: "b".repeat(40),
+                    path: "src/lib.rs".into(),
+                    start: 1,
+                    end: 1,
+                })
+                .await?;
+            self.history.lock().expect("history capture").push(found);
+            Ok(ModelResponse {
+                value: json!({"summary": "Indexing can panic on an empty slice.", "findings": [{
+                    "path": "src/lib.rs", "existing_code": "items[0]", "rule": "unchecked-index",
+                    "title": "Guard the index", "body": "Indexing panics for an empty slice.",
+                    "severity": "high", "confidence": 0.9
+                }], "rules": [], "rejected": []}),
+                model: "test/history-probe".into(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    let corpus_dir = corpus_dir("");
+    let corpus = load(corpus_dir.path()).expect("loads corpus");
+    let source = tempfile::tempdir().expect("source tree");
+    std::fs::create_dir_all(source.path().join("src")).expect("source directory");
+    std::fs::write(
+        source.path().join("src/lib.rs"),
+        "fn from_another_revision() {}\n",
+    )
+    .expect("source file");
+    let history = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let falsification_keys = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut config = config();
+    config.models.agentic_reviewers = true;
+    // This test pins the fixture-revision history lookup. A second adaptive
+    // pass would legitimately issue the same history query again after the
+    // high-severity response, so keep the probe to one review pass.
+    config.review.passes = 1;
+
+    run(
+        &corpus,
+        &config,
+        Some(Arc::new(HistoryProbe {
+            history: history.clone(),
+            falsification_keys: falsification_keys.clone(),
+        })),
+        &RunOptions {
+            out: corpus_dir.path().join("runs/record"),
+            record: true,
+            tree: Some(source.path().to_path_buf()),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("records against the supplied tree");
+
+    {
+        let history = history.lock().expect("history capture");
+        assert_eq!(history.len(), 1);
+        assert!(
+            !matches!(history[0], Found::Text { .. }),
+            "an arbitrary directory cannot answer history at the fixture's commit: {:?}",
+            history[0]
+        );
+    }
+    let falsification_key = falsification_keys
+        .lock()
+        .expect("falsification key capture")
+        .first()
+        .cloned()
+        .expect("the finding reaches the falsifier");
+
+    let recorded_corpus = load(corpus_dir.path()).expect("loads persisted source evidence");
+    let lookups = &recorded_corpus.cases[0].fixture.lookups;
+    assert!(
+        lookups.contains_key(
+            &Lookup::Read {
+                path: "src/lib.rs".into(),
+                start: Some(1),
+                end: Some(2),
+            }
+            .key()
+        )
+    );
+    assert!(
+        lookups.contains_key(
+            &TreeQuery::Symbol {
+                symbol: "from_another_revision".into(),
+                limit: 3,
+            }
+            .key()
+        )
+    );
+    assert!(
+        lookups.contains_key(
+            &TreeQuery::History {
+                commit: "b".repeat(40),
+                path: "src/lib.rs".into(),
+                start: 1,
+                end: 1,
+            }
+            .key()
+        )
+    );
+    let cassette_dir = recorded_corpus.cases[0].cassette_dir(corpus_dir.path());
+    let mut found_falsification_take = false;
+    for entry in std::fs::read_dir(cassette_dir).expect("cassette directory") {
+        let raw =
+            std::fs::read_to_string(entry.expect("cassette entry").path()).expect("cassette take");
+        let take: crate::harness::cassette::Take =
+            serde_json::from_str(&raw).expect("valid cassette take");
+        if take.schema_name == "tinysweeper_falsify" {
+            assert_eq!(take.key, falsification_key);
+            found_falsification_take = true;
+        }
+    }
+    assert!(
+        found_falsification_take,
+        "the actual falsification response is recorded"
+    );
+
+    let replay_out = corpus_dir.path().join("runs/replay");
+    let replay = run(
+        &recorded_corpus,
+        &config,
+        None,
+        &RunOptions {
+            out: replay_out,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect("strict replay is offline");
+    assert!(
+        replay.scores[0].error.is_none(),
+        "all review and falsification keys replay: {:?}",
+        replay.scores[0]
+    );
+}
+
 /// A model that reports the real defect on the added line.
 fn finder() -> Arc<MockModel> {
     Arc::new(MockModel::always(json!({
@@ -279,6 +981,41 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     other_model.models.deep = "deepseek/deepseek-v4-pro".into();
     assert_ne!(digest_of(&base), digest_of(&other_model));
 
+    // Each stage has its own effort override. A role-only configuration
+    // change must invalidate an eval baseline even when the global effort is
+    // unchanged.
+    let mut reviewer_effort = base.clone();
+    reviewer_effort.models.reviewer_reasoning_effort = "low".into();
+    assert_ne!(digest_of(&base), digest_of(&reviewer_effort));
+    let mut falsify_effort = base.clone();
+    falsify_effort.models.falsify_reasoning_effort = "high".into();
+    assert_ne!(digest_of(&base), digest_of(&falsify_effort));
+    let mut summary_effort = base.clone();
+    summary_effort.models.summary_reasoning_effort = "high".into();
+    assert_ne!(digest_of(&base), digest_of(&summary_effort));
+
+    let baseline = crate::eval::types::Scorecard {
+        corpus_digest: "same-corpus".into(),
+        config_digest: digest_of(&base),
+        execution_limits: None,
+        loose_replays: 0,
+        cases: vec![],
+    };
+    for changed in [&reviewer_effort, &falsify_effort, &summary_effort] {
+        let current = crate::eval::types::Scorecard {
+            corpus_digest: baseline.corpus_digest.clone(),
+            config_digest: digest_of(changed),
+            execution_limits: None,
+            loose_replays: 0,
+            cases: vec![],
+        };
+        assert!(matches!(
+            crate::eval::report::compare(&current, &baseline, false),
+            crate::eval::report::Comparison::Incomparable(reason)
+                if reason.contains("configuration changed")
+        ));
+    }
+
     // The per-PR ceiling decides whether a case fails with `Error::Budget`, so
     // two runs that spend the same model but allow different money are not the
     // same run either.
@@ -341,6 +1078,79 @@ async fn the_config_digest_moves_when_the_prompt_inputs_move() {
     );
 
     assert_eq!(digest_of(&base), digest_of(&config()));
+}
+
+#[tokio::test]
+async fn execution_limits_capture_selected_cases_and_effective_run_ceilings() {
+    let dir = corpus_dir(EXPECTATION);
+    std::fs::write(
+        dir.path().join("cases/ts-0002.toml"),
+        case_toml(EXPECTATION).replace("id = \"ts-0001\"", "id = \"ts-0002\""),
+    )
+    .expect("write second case");
+    let full = load(dir.path()).expect("loads both cases");
+    let selected = full
+        .clone()
+        .select(&["ts-0001".to_owned()])
+        .expect("select known case");
+    let base_options = RunOptions {
+        out: dir.path().join("runs/identity-base"),
+        max_cost_usd: 0.25,
+        max_physical_calls_per_case: Some(8),
+        ..RunOptions::default()
+    };
+    let base = run(&full, &config(), None, &base_options)
+        .await
+        .expect("empty spend ceiling skips cases");
+    let selected_options = RunOptions {
+        out: dir.path().join("runs/identity-selected"),
+        ..base_options.clone()
+    };
+    let selected_run = run(&selected, &config(), None, &selected_options)
+        .await
+        .expect("selected empty run");
+    let different_bound = RunOptions {
+        out: dir.path().join("runs/identity-bound"),
+        max_cost_usd: 0.2,
+        max_physical_calls_per_case: Some(7),
+        ..base_options
+    };
+    let bounded_run = run(&full, &config(), None, &different_bound)
+        .await
+        .expect("bounded empty run");
+
+    assert_eq!(
+        base.execution_limits.selected_case_ids,
+        ["ts-0001", "ts-0002"]
+    );
+    assert_eq!(selected_run.execution_limits.selected_case_ids, ["ts-0001"]);
+    assert_eq!(base.execution_limits.max_cost_usd, 0.25);
+    assert_eq!(base.execution_limits.max_physical_calls_per_case, Some(8));
+    assert_ne!(base.execution_limits, selected_run.execution_limits);
+    assert_ne!(base.execution_limits, bounded_run.execution_limits);
+    assert!(
+        base.execution_limits
+            .effective_case_budgets
+            .iter()
+            .all(|budget| { budget.budget_usd.is_none() })
+    );
+    let recording_limits = super::effective_execution_limits(
+        &full,
+        &config(),
+        &RunOptions {
+            record: true,
+            max_cost_usd: 0.025,
+            ..RunOptions::default()
+        },
+    );
+    assert_eq!(
+        recording_limits
+            .effective_case_budgets
+            .iter()
+            .map(|budget| budget.budget_usd)
+            .collect::<Vec<_>>(),
+        [Some(0.0125), Some(0.0125)]
+    );
 }
 
 #[tokio::test]
@@ -735,6 +1545,7 @@ async fn failed_case_marks_unreported_model_charges_unknown() {
         messages: vec![],
         schema: json!({}),
         schema_name: "test".into(),
+        reasoning_effort: None,
         max_tokens: 10,
     };
     assert!(cassette.complete(request).await.is_err());

@@ -88,6 +88,13 @@ does not take it back out.
   all, and both are always rendered in the summary regardless of whether that
   line changed. See `docs/modules/lanes/e2e.md`.
 
+## Bounded review planning
+
+Large pull requests use a shared risk-ranked selection, one pass and a review-wide
+physical call ceiling. Normal and Large reviews stop new work at the soft
+deadline and retain answered work. See [large pull request reviews](large-pr.md)
+for defaults, coverage and custom-model limitations.
+
 ## Per-file fan-out
 
 `security` and `critique` run one conversation per changed file
@@ -207,12 +214,14 @@ it was also the reason a correct `medium/0.61` boundary bug reached nobody.
 
 ## Coverage pass
 
-`review.passes = 3` ships as the maximum adaptive depth. Small groups still
-take exactly one pass. For qualifying groups, `critique` and `security`
-each ask their group's first council reviewer — index `0`, never the whole
-council again — up to two more times after round one's own findings are placed
-and model proposals falsified (including explicit security-scope rejection), told plainly what it already found and
-asked to look for what a first pass misses. `lanes::coverage` builds that
+`review.passes = 2` is the default maximum adaptive depth; an explicit larger
+value allows additional passes. A group takes another pass when the previous
+pass proposed a candidate, even if falsification later rejects it, or when its
+diff has a deterministic high-risk signal. Otherwise it takes exactly one
+pass. For qualifying groups, `critique` and `security` ask their group's first
+council reviewer — index `0`, never the whole council again — up to the
+configured ceiling after round one's findings are placed and model proposals
+falsified. `lanes::coverage` builds that
 call; see its module doc for why anchoring the answer is left to the caller
 rather than done once in that module.
 
@@ -224,10 +233,10 @@ each extra call.
 
 Two things keep it from being a second council for every unit:
 
-- **A line gate.** `COVERAGE_PASS_MIN_LINES` (40, one constant per lane) has
-  to be cleared by the *group's* own changed lines before the second prompt
-  is even built. A rename or a one-line fix never pays for a call it cannot
-  use.
+- **Adaptive eligibility.** A raw candidate or deterministic high-risk file
+  within the *group* triggers the next prompt; unrelated large changes do not
+  affect it. Candidate eligibility is decided before falsification so a
+  rejected candidate still receives the promised second look.
 - **Dedupe before falsify.** A new finding that `council::agree::corroborates`
   a round-one finding, or shares its `Finding::fingerprint`, is dropped before
   anything else runs against it — both lanes' falsify calls included, which
@@ -238,10 +247,14 @@ first found in addition to round one's own list. An empty, failed, malformed,
 entirely duplicate, unplaceable, or fully filtered pass stops the loop rather
 than paying for the next one.
 
-Each qualifying group emits one structured telemetry event after it stops.
-`passes_attempted` and `new_findings_per_pass` both begin with round one, then
-list every adaptive attempt; `stop_reason` distinguishes reaching the ceiling
-from an empty, failed, unplaceable, duplicate, or filtered response.
+Each group emits one structured telemetry event after it stops. The review
+timing record also aggregates completed pass yields by lane and pass, counting
+candidate findings before falsification and survivors after it. The yield is
+recorded as soon as a pass finishes, so later cancellation does not erase it.
+`passes_attempted`, `candidate_findings_per_pass`, and
+`surviving_findings_per_pass` begin with round one, then list every adaptive
+attempt; `stop_reason` distinguishes reaching the ceiling from an empty,
+failed, unplaceable, duplicate, or filtered response.
 `input_tokens`, `output_tokens`, `cached_tokens`, and `cost_usd` are summed from
 the model responses made by that group rather than inferred from the lane-wide
 spend tally, which is shared by concurrently reviewed groups.
@@ -280,3 +293,24 @@ completion. See [e2e.md](e2e.md).
 3. A dispatch arm in `src/app/review.rs`.
 4. A golden test: fixture diff, canned `MockModel` response, assertions on
    exactly the findings that survive filtering, dedupe and capping.
+
+## Coverage and clean scans
+
+A lane with unanswered files is `Neutral` unless its findings already warrant
+`Failure`. It cannot report a clean success for work it did not complete. The
+per-file check title gives the reviewed and unreviewed counts, so a partial
+result is visible even when the summary is folded. The umbrella review check
+unions distinct unread paths across per-file lanes, so a file is counted as
+reviewed only when every applicable lane answered it. Whole-PR lanes keep a
+separate incomplete signal; their lane names are never counted as file paths.
+The umbrella title preserves that signal alongside file coverage and any
+changes-requested verdict. A per-file lane also records unchanged replayed
+paths and exact mechanical substitutions as reviewed proof, while a failed
+sample remains unanswered. Security coverage applies its own attack-surface
+triage before counting replayed or verified paths, so prose outside that
+lane's scope is not presented as a security gap.
+
+The `commits` lane is different: an empty deterministic scanner result is a
+successful clean scan, titled “No sensitive content in committed files.” It
+did inspect the committed files; describing that as a skip would hide a useful
+all-clear behind wording reserved for work that never happened.

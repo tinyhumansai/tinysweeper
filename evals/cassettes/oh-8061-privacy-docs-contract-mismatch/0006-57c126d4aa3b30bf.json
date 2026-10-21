@@ -1,0 +1,22 @@
+{
+  "key": "57c126d4aa3b30bf",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10284,
+    "output_tokens": 837,
+    "reasoning_tokens": 936,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00072345
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added speech egress functionality appears correct and the tests cover key edge cases; no defects are evident."
+  }
+}

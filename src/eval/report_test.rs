@@ -4,7 +4,22 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::config::types::LaneId;
-use crate::eval::types::{Judged, Verdict};
+use crate::eval::types::{EffectiveCaseBudget, ExecutionLimits, Judged, Verdict};
+
+fn execution_limits(case_id: &str) -> ExecutionLimits {
+    ExecutionLimits {
+        selected_case_ids: vec![case_id.into()],
+        max_cost_usd: 5.0,
+        max_physical_calls_per_case: Some(8),
+        recording: false,
+        loose_replay: false,
+        effective_case_budgets: vec![EffectiveCaseBudget {
+            case_id: case_id.into(),
+            budget_usd: None,
+            max_physical_calls_per_case: None,
+        }],
+    }
+}
 
 fn case_score(id: &str, found: usize, missed: &[&str], fp: usize) -> CaseScore {
     CaseScore {
@@ -34,6 +49,7 @@ fn card(cases: Vec<CaseScore>) -> Scorecard {
     Scorecard {
         corpus_digest: "aaaaaaaaaaaaaaaa".into(),
         config_digest: "bbbbbbbbbbbbbbbb".into(),
+        execution_limits: Some(execution_limits("ts-0001")),
         loose_replays: 0,
         cases,
     }
@@ -222,6 +238,74 @@ fn a_configuration_that_moved_is_not_comparable_without_saying_so() {
         Comparison::Incomparable(why) => assert!(why.contains("configuration changed"), "{why}"),
         other => panic!("expected incomparable, got {other:?}"),
     }
+}
+
+#[test]
+fn changed_execution_limits_make_scorecards_incomparable() {
+    let baseline = card(vec![case_score("ts-0001", 1, &[], 0)]);
+    let mut current = card(vec![case_score("ts-0001", 1, &[], 0)]);
+    let mut changed = execution_limits("ts-0001");
+    changed.max_physical_calls_per_case = Some(4);
+    current.execution_limits = Some(changed);
+
+    assert!(matches!(
+        compare(&current, &baseline, false),
+        Comparison::Incomparable(reason) if reason.contains("execution limits changed")
+    ));
+}
+
+#[test]
+fn different_admitted_recording_allowances_make_scorecards_incomparable() {
+    let mut current = card(vec![case_score("ts-0001", 0, &[], 0)]);
+    let mut current_limits = execution_limits("ts-0001");
+    current_limits.recording = true;
+    current_limits.effective_case_budgets[0].max_physical_calls_per_case = Some(40);
+    current.execution_limits = Some(current_limits.clone());
+    let mut baseline = current.clone();
+    current_limits.effective_case_budgets[0].max_physical_calls_per_case = Some(32);
+    baseline.execution_limits = Some(current_limits);
+
+    assert!(matches!(
+        compare(&current, &baseline, false),
+        Comparison::Incomparable(reason) if reason.contains("execution limits changed")
+    ));
+}
+
+#[test]
+fn old_recording_scorecards_without_admitted_allowances_fail_closed() {
+    let current = card(vec![case_score("ts-0001", 0, &[], 0)]);
+    let mut old_json = serde_json::to_value(&current).expect("scorecard serializes");
+    let limits = old_json["execution_limits"]
+        .as_object_mut()
+        .expect("execution limits object");
+    limits.insert("recording".into(), serde_json::Value::Bool(true));
+    let budgets = limits["effective_case_budgets"]
+        .as_array_mut()
+        .expect("case budgets");
+    for budget in budgets {
+        budget
+            .as_object_mut()
+            .expect("budget object")
+            .remove("max_physical_calls_per_case");
+    }
+    let legacy: Scorecard = serde_json::from_value(old_json).expect("legacy limits deserialize");
+
+    assert!(matches!(
+        compare(&legacy, &legacy, false),
+        Comparison::Incomparable(reason) if reason.contains("physical-call allowance is unknown")
+    ));
+}
+
+#[test]
+fn legacy_scorecards_without_execution_limits_fail_closed() {
+    let baseline = card(vec![case_score("ts-0001", 1, &[], 0)]);
+    let mut legacy = card(vec![case_score("ts-0001", 1, &[], 0)]);
+    legacy.execution_limits = None;
+
+    assert!(matches!(
+        compare(&legacy, &baseline, false),
+        Comparison::Incomparable(reason) if reason.contains("execution limits are unknown")
+    ));
 }
 
 #[test]

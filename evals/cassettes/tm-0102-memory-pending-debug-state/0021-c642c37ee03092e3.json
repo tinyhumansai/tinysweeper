@@ -1,0 +1,49 @@
+{
+  "key": "c642c37ee03092e3",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 7150,
+    "output_tokens": 570,
+    "reasoning_tokens": 320,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0005
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry/oauth",
+        "pattern": "trait PendingAuthorizationStore",
+        "why": "Confirm the async method signatures and required bounds for the dyn trait used via Arc."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry/oauth",
+        "pattern": "struct MemoryPendingStore",
+        "why": "Verify that MemoryPendingStore implements PendingAuthorizationStore and its async methods."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry/oauth",
+        "pattern": "fn now_unix",
+        "why": "Check the semantics of the timestamp and whether it matches usage in pending expiration logic."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry/oauth",
+        "pattern": "fn malformed",
+        "why": "Validate the error construction to ensure the expected error type is returned."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `PendingAuthorizationStore` and related async methods to verify that the trait object usage and method signatures are correct, and to ensure `MemoryPendingStore` implements the required async trait. No definite defects can be identified without that information."
+  }
+}

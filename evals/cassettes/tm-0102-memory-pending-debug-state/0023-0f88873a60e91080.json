@@ -1,0 +1,49 @@
+{
+  "key": "0f88873a60e91080",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4436,
+    "output_tokens": 413,
+    "reasoning_tokens": 179,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032505
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src",
+        "pattern": "MemoryPendingStore",
+        "why": "Check if MemoryPendingStore is defined and public in the registry module."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src",
+        "pattern": "PENDING_TTL_SECS",
+        "why": "Check if PENDING_TTL_SECS constant is defined and public in the registry module."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src",
+        "pattern": "PendingAuthorization",
+        "why": "Check if PendingAuthorization type is defined and public in the registry module."
+      },
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src",
+        "pattern": "PendingAuthorizationStore",
+        "why": "Check if PendingAuthorizationStore type is defined and public in the registry module."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to verify that the newly re-exported identifiers exist and are public in the registry module."
+  }
+}

@@ -151,15 +151,20 @@ review deadline remain terminal. A timed-out paid call retains its conservative
 budget reservation because its actual charge is unknown. Agent reviewers retain
 their separate 60-second turn deadline.
 
-Scoped monetary ledgers admit paid calls atomically when their conservative
-bounds fit. Calls that need capacity wait for outstanding reservations to settle,
-so affordable lane work does not fail merely because temporary bounds exceed the
-limit. Fitting calls run concurrently, including agent reviewer child ledgers.
-Cancellation before admission reserves and charges nothing; canceled or timed-out
-dispatched calls retain their unknown-charge bounds. Permanently unaffordable
-work fails before dispatch. Clones share the ledger; a fresh scope is isolated.
-Internal provider retries retain fail-fast admission and no completed call is
-replayed to recover capacity.
+Admission estimates input tokens as serialized request bytes divided by four,
+plus bounded framing, and reserves the lane/model rolling p90 output observed in
+the last 32 physical attempts. A cold lane starts at one eighth of its output
+cap. The estimate never changes the provider's output cap or Embed's separate
+serialized-size safety bound. Reservations are fail-fast: a call that cannot fit
+alongside live reservations returns the typed budget error instead of serializing
+the lane fan-out. When the gateway reports a charge, the ledger settles that
+amount and releases the unused reservation; an unknown charge retains the
+reservation. The model usage record still falls back to the configured price
+table when billing metadata is absent. Reservations forecast provider cost, not
+a provider-side spend cap: a gateway bill can exceed its estimate. The ledger
+charges the full reported amount and refuses later calls that cannot fit.
+Clones share the ledger and output history; a fresh budget scope has an isolated
+ledger.
 
 Reasoning tokens are *not* separately priced: OpenRouter bills them as output
 tokens and reports them inside `output_tokens`, so they are already in the cost.

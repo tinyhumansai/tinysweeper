@@ -1,0 +1,22 @@
+{
+  "key": "08023373cf23603d",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10463,
+    "output_tokens": 878,
+    "reasoning_tokens": 1022,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00074265
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added disclose_speech_transfer function and its tests appear correct; no defects are evident from the diff."
+  }
+}

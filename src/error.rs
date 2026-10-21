@@ -37,6 +37,11 @@ pub enum Error {
     #[error("forge: {0}")]
     Forge(String),
 
+    /// Review workers are at capacity and a manual request was refused before
+    /// it spent credentials or read pull request data.
+    #[error("review capacity is full; retry the manual request")]
+    ReviewCapacityFull,
+
     /// A model call failed, timed out, or returned output that did not match
     /// the lane's structured-output schema.
     #[error("model: {0}")]
@@ -49,6 +54,23 @@ pub enum Error {
         message: String,
         /// Known or conservatively bounded paid usage.
         usage: Box<crate::ports::model::Usage>,
+    },
+
+    /// A review-wide physical-dispatch policy stopped model work.
+    #[error("model execution refused: {refusal:?}")]
+    ModelExecutionRefused {
+        /// Typed policy reason; callers must not infer it from display text.
+        refusal: crate::ports::model_execution::ModelExecutionRefusal,
+        /// Actual provider usage observed before the refusal, when any.
+        usage: Option<Box<crate::ports::model::Usage>>,
+        /// Whether accounting covers every paid dispatch in the whole
+        /// logical operation. `None` plus `true` means no paid physical call
+        /// occurred; `None` plus `false` means a call may have been paid but
+        /// its usage is unknown. `Some(false)` retains known lower-bound usage
+        /// when a dispatched call omitted tokens or cost. `Usage` has no
+        /// unknown-cost representation, so this marker prevents a zero
+        /// placeholder from being mistaken for an actual zero-dollar total.
+        accounting_complete: bool,
     },
 
     /// A lane refused to run or could not produce a verdict.
@@ -80,6 +102,8 @@ pub enum Error {
         spent: f64,
         /// The configured ceiling.
         limit: f64,
+        /// Paid model usage from earlier turns, when this refusal follows them.
+        usage: Option<Box<crate::ports::model::Usage>>,
     },
 
     /// A pull request is larger than the review's deterministic input limits.
@@ -101,6 +125,24 @@ pub enum Error {
         max_lines: u64,
     },
 
+    /// The selected large-review policy cannot be enforced by the model port.
+    ///
+    /// This is deterministic and non-transient: retrying the same model
+    /// adapter cannot make its physical-dispatch capability appear.
+    #[error("large review requires a model with physical execution control")]
+    ReviewExecutionUnavailable,
+
+    /// The pull request head changed after the server claimed a review lease.
+    /// This is a clean skip: retry on the new head rather than reviewing it
+    /// under a lease for a different revision.
+    #[error("pull request head changed before the review started")]
+    ReviewSuperseded,
+
+    /// This process lost its durable scheduler ownership before a protected
+    /// review phase could start or publish.
+    #[error("review worker ownership expired or was replaced")]
+    ReviewOwnershipLost,
+
     /// A feature required for this code path was not compiled in.
     #[error("{0} requires the `{1}` feature; rebuild with --features {1}")]
     FeatureDisabled(&'static str, &'static str),
@@ -119,17 +161,60 @@ pub enum Error {
 }
 
 impl Error {
-    /// Paid usage retained by a model refusal, when available.
+    /// Paid model usage retained when an unsuccessful review has accounting.
     pub fn usage(&self) -> Option<crate::ports::model::Usage> {
         match self {
             Self::ModelUsage { usage, .. } => Some(**usage),
+            Self::ModelExecutionRefused {
+                usage: Some(usage), ..
+            } => Some(**usage),
+            Self::Budget {
+                usage: Some(usage), ..
+            } => Some(**usage),
+            _ => None,
+        }
+    }
+
+    /// Whether the model usage has complete token and cost accounting.
+    ///
+    /// Legacy errors carrying [`Usage`](crate::ports::model::Usage) retain
+    /// their existing accounting contract. A typed execution refusal reports
+    /// `Some(false)` when any dispatched call omitted usage or cost.
+    pub fn usage_accounting_complete(&self) -> Option<bool> {
+        match self {
+            Self::ModelExecutionRefused {
+                usage,
+                accounting_complete,
+                ..
+            } if usage.is_some() => Some(*accounting_complete),
             _ => None,
         }
     }
 
     /// Keep safe paid accounting when a model cannot return an answer.
     pub fn with_usage(self, usage: crate::ports::model::Usage) -> Self {
-        let message = match self {
+        let error = match self {
+            Self::Budget { spent, limit, .. } => {
+                return Self::Budget {
+                    spent,
+                    limit,
+                    usage: Some(Box::new(usage)),
+                };
+            }
+            Self::ModelExecutionRefused {
+                refusal,
+                usage: _,
+                accounting_complete,
+            } => {
+                return Self::ModelExecutionRefused {
+                    refusal,
+                    usage: Some(Box::new(usage)),
+                    accounting_complete,
+                };
+            }
+            other => other,
+        };
+        let message = match error {
             Self::Model(message) | Self::ModelUsage { message, .. } => message,
             other => other.to_string(),
         };
@@ -197,8 +282,97 @@ mod tests {
         let err = Error::Budget {
             spent: 1.239,
             limit: 1.0,
+            usage: None,
         };
         assert_eq!(err.to_string(), "budget exhausted: spent $1.24 of $1.00");
+    }
+
+    #[test]
+    fn paid_budget_refusal_keeps_its_classification_and_usage() {
+        let usage = crate::ports::model::Usage {
+            input_tokens: 12,
+            output_tokens: 4,
+            cost_usd: 0.015,
+            ..Default::default()
+        };
+        let err = Error::Budget {
+            spent: 0.015,
+            limit: 0.02,
+            usage: None,
+        }
+        .with_usage(usage);
+        assert!(matches!(err, Error::Budget { .. }));
+        assert_eq!(err.usage(), Some(usage));
+    }
+
+    #[test]
+    fn a_budget_refusal_without_paid_turns_has_no_usage() {
+        let err = Error::Budget {
+            spent: 0.0,
+            limit: 0.02,
+            usage: None,
+        };
+        assert_eq!(err.usage(), None);
+    }
+
+    #[test]
+    fn execution_refusal_keeps_its_typed_reason_and_unknown_accounting() {
+        use crate::ports::model_execution::ModelExecutionRefusal;
+
+        let err = Error::ModelExecutionRefused {
+            refusal: ModelExecutionRefusal::CallLimit,
+            usage: Some(Box::new(crate::ports::model::Usage {
+                input_tokens: 5,
+                calls_attempted: 1,
+                ..Default::default()
+            })),
+            accounting_complete: false,
+        };
+
+        assert!(matches!(
+            &err,
+            Error::ModelExecutionRefused {
+                refusal: ModelExecutionRefusal::CallLimit,
+                ..
+            }
+        ));
+        assert_eq!(err.usage().unwrap().input_tokens, 5);
+        assert_eq!(err.usage_accounting_complete(), Some(false));
+    }
+
+    #[test]
+    fn replacing_usage_preserves_execution_refusal_classification() {
+        use crate::ports::model_execution::ModelExecutionRefusal;
+
+        let err = Error::ModelExecutionRefused {
+            refusal: ModelExecutionRefusal::Cancelled,
+            usage: Some(Box::new(crate::ports::model::Usage {
+                input_tokens: 5,
+                cost_usd: 0.125,
+                calls_attempted: 1,
+                calls_succeeded: 1,
+                ..Default::default()
+            })),
+            accounting_complete: true,
+        }
+        .with_usage(crate::ports::model::Usage {
+            output_tokens: 2,
+            cost_usd: 0.25,
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            &err,
+            Error::ModelExecutionRefused {
+                refusal: ModelExecutionRefusal::Cancelled,
+                ..
+            }
+        ));
+        let usage = err.usage().unwrap();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 2);
+        assert_eq!(usage.cost_usd, 0.25);
+        assert_eq!(err.usage_accounting_complete(), Some(true));
     }
 
     #[test]

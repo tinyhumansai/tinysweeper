@@ -1,0 +1,22 @@
+{
+  "key": "a1c1abf0ac9537cc",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4530,
+    "output_tokens": 772,
+    "reasoning_tokens": 839,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004195
+  },
+  "value": {
+    "findings": [],
+    "summary": "The documentation change updates the test coverage matrix row without introducing any code defects."
+  }
+}

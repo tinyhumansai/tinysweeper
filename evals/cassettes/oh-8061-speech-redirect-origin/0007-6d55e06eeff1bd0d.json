@@ -1,0 +1,32 @@
+{
+  "key": "6d55e06eeff1bd0d",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4623,
+    "output_tokens": 288,
+    "reasoning_tokens": 176,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00030315
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/egress.rs",
+        "start": 1,
+        "why": "Determine the function signature, error type, and any preconditions for calling disclose_speech_transfer"
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to view the definition of `super::egress::disclose_speech_transfer` to verify its signature, error handling, and any constraints the new call must satisfy."
+  }
+}

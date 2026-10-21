@@ -19,12 +19,15 @@
 //! being the answer rather than an exception.
 
 use bson::{Document, doc};
-use mongodb::options::IndexOptions;
-use mongodb::{Collection, IndexModel};
+use mongodb::options::{Acknowledgment, CollectionOptions, IndexOptions, WriteConcern};
+use mongodb::{Collection, Database, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::lanes::e2e::runs::Watch;
+use crate::ports::review_job::{
+    Admission, OwnedReview, PaidStart, ReviewJobStore, ReviewSchedulerState, TerminalOutcome,
+};
 use crate::preview::session::Session as PreviewSession;
 use crate::state::types::ReviewedState;
 
@@ -37,6 +40,10 @@ pub const LEASE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 6
 /// Environment variable naming the test database. Absent means the store tests
 /// skip, which is what keeps `cargo test` offline by default.
 pub const TEST_URI_ENV: &str = "TINYSWEEPER_TEST_MONGODB_URI";
+
+const REVIEW_SCHEDULER_ID: &str = "review-scheduler-v1";
+const REVIEW_SCHEDULER_CAS_RETRIES: usize = 16;
+const REVIEW_SCHEDULER_BSON_LIMIT: usize = 8 * 1024 * 1024;
 
 /// How much a contributor is trusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,12 +128,274 @@ pub const PREVIEW_SESSION_TTL: std::time::Duration = std::time::Duration::from_s
 /// The server's persistent state.
 #[derive(Clone, Debug)]
 pub struct Store {
+    database: Database,
     contributors: Collection<Contributor>,
     deliveries: Collection<Document>,
     leases: Collection<Document>,
     installations: Collection<Document>,
     review_state: Collection<Document>,
     preview_sessions: Collection<Document>,
+    review_scheduler: Collection<Document>,
+}
+
+#[async_trait::async_trait]
+impl ReviewJobStore for Store {
+    async fn has_capacity_for(&self, count: usize) -> Result<bool> {
+        let mut state = self.review_scheduler_state().await?;
+        let now_ms = self.server_now_ms().await?;
+        state
+            .terminal
+            .retain(|record| record.expires_at_ms > now_ms);
+        state
+            .head_history
+            .retain(|record| record.expires_at_ms > now_ms);
+        Ok(count > 0
+            && state.unfinished.len() + count <= crate::ports::review_job::MAX_UNFINISHED_REVIEWS
+            && state.reserved_capacity() + count
+                <= crate::ports::review_job::MAX_TERMINAL_REVIEW_RESERVATIONS)
+    }
+
+    async fn admit_batch(
+        &self,
+        requests: Vec<crate::ports::review_job::ReviewRequest>,
+    ) -> Result<Admission> {
+        self.change_review_scheduler(move |state, now_ms| {
+            state.admit_batch(requests.clone(), now_ms)
+        })
+        .await
+    }
+
+    async fn claim_pending_checks(
+        &self,
+        _now_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::ports::review_job::PendingReviewCheck>> {
+        self.change_review_scheduler(move |state, now_ms| state.claim_pending_checks(now_ms, limit))
+            .await
+    }
+
+    async fn claim_pending_metadata(
+        &self,
+        _now_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::ports::review_job::PendingReviewMetadata>> {
+        self.change_review_scheduler(move |state, now_ms| {
+            state.claim_pending_metadata(now_ms, limit)
+        })
+        .await
+    }
+
+    async fn metadata_claim_current(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewMetadata,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.metadata_claim_current(pending, self.server_now_ms().await?))
+    }
+
+    async fn resolve_pending_metadata(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewMetadata,
+        head_sha: &str,
+        open: bool,
+        draft: bool,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let pending = pending.clone();
+        let head_sha = head_sha.to_owned();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.resolve_pending_metadata(&pending, &head_sha, open, draft, now_ms)
+        })
+        .await
+    }
+
+    async fn record_queued_check_id(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewCheck,
+        check_id: u64,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let pending = pending.clone();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.record_queued_check_id(&pending, check_id, now_ms)
+        })
+        .await
+    }
+
+    async fn queued_check_claim_current(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewCheck,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.queued_check_claim_current(pending, self.server_now_ms().await?))
+    }
+
+    async fn mark_queue_post_attempted(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewCheck,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let pending = pending.clone();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.mark_queue_post_attempted(&pending, now_ms)
+        })
+        .await
+    }
+
+    async fn complete_retired_check(
+        &self,
+        pending: &crate::ports::review_job::PendingReviewCheck,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let pending = pending.clone();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.complete_retired_check(&pending, now_ms)
+        })
+        .await
+    }
+
+    async fn set_check_stage(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        check_id: u64,
+        stage: crate::ports::review_job::ReviewCheckStage,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let owned = owned.clone();
+        let head_sha = head_sha.to_owned();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.set_check_stage(&owned, &head_sha, check_id, stage, now_ms)
+        })
+        .await
+    }
+
+    async fn check_transition_current(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        check_id: u64,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.check_transition_current(owned, head_sha, check_id, self.server_now_ms().await?))
+    }
+
+    async fn claim_next(&self, owner: &str, _now_ms: i64) -> Result<Option<OwnedReview>> {
+        let owner = owner.to_owned();
+        self.change_review_scheduler(move |state, now_ms| state.claim_next(&owner, now_ms))
+            .await
+    }
+
+    async fn claim_next_with_limit(
+        &self,
+        owner: &str,
+        _now_ms: i64,
+        limit: usize,
+    ) -> Result<Option<OwnedReview>> {
+        let owner = owner.to_owned();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.claim_next_with_limit(&owner, now_ms, limit)
+        })
+        .await
+    }
+
+    async fn begin_paid(&self, owned: &OwnedReview, _now_ms: i64) -> Result<PaidStart> {
+        let owned = owned.clone();
+        self.change_review_scheduler(move |state, now_ms| state.begin_paid(&owned, now_ms))
+            .await
+    }
+
+    async fn confirm_head(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        _now_ms: i64,
+    ) -> Result<bool> {
+        let owned = owned.clone();
+        let head_sha = head_sha.to_owned();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.confirm_head(&owned, &head_sha, now_ms)
+        })
+        .await
+    }
+
+    async fn reconcile_live_check(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        _now_ms: i64,
+    ) -> Result<crate::ports::review_job::ReconciledReviewCheck> {
+        let owned = owned.clone();
+        let head_sha = head_sha.to_owned();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.reconcile_live_check(&owned, &head_sha, now_ms)
+        })
+        .await
+    }
+
+    async fn head_is_terminal(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.head_is_terminal(owned, self.server_now_ms().await?))
+    }
+
+    async fn renew(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let owned = owned.clone();
+        self.change_review_scheduler(move |state, now_ms| state.renew(&owned, now_ms))
+            .await
+    }
+
+    async fn owns(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.owns(owned, self.server_now_ms().await?))
+    }
+
+    async fn should_continue(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let state = self.review_scheduler_state().await?;
+        Ok(state.should_continue(owned, self.server_now_ms().await?))
+    }
+
+    async fn defer(
+        &self,
+        owned: &OwnedReview,
+        local_now_ms: i64,
+        not_before_ms: i64,
+    ) -> Result<bool> {
+        let owned = owned.clone();
+        let delay_ms = not_before_ms.saturating_sub(local_now_ms).max(0);
+        self.change_review_scheduler(move |state, now_ms| {
+            state.defer(&owned, now_ms, now_ms.saturating_add(delay_ms))
+        })
+        .await
+    }
+
+    async fn defer_yield(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let owned = owned.clone();
+        self.change_review_scheduler(move |state, now_ms| state.defer_yield(&owned, now_ms))
+            .await
+    }
+
+    async fn finish(
+        &self,
+        owned: &OwnedReview,
+        outcome: TerminalOutcome,
+        _now_ms: i64,
+        _completed_at_ms: i64,
+    ) -> Result<bool> {
+        let owned = owned.clone();
+        self.change_review_scheduler(move |state, now_ms| {
+            state.finish(&owned, outcome, now_ms, now_ms)
+        })
+        .await
+    }
+
+    async fn finish_deadline(&self, owned: &OwnedReview, _now_ms: i64) -> Result<bool> {
+        let owned = owned.clone();
+        self.change_review_scheduler(move |state, now_ms| state.finish_deadline(&owned, now_ms))
+            .await
+    }
 }
 
 impl Store {
@@ -137,14 +406,25 @@ impl Store {
         // server-selection timeout is the one GitHub's ten seconds depends on.
         let client = crate::index::client::connect(uri).await?;
         let database = client.database(name);
+        let scheduler_options = CollectionOptions::builder()
+            .write_concern(
+                WriteConcern::builder()
+                    .w(Acknowledgment::Nodes(1))
+                    .journal(true)
+                    .build(),
+            )
+            .build();
 
         let store = Self {
+            database: database.clone(),
             contributors: database.collection("contributors"),
             deliveries: database.collection("deliveries"),
             leases: database.collection("leases"),
             installations: database.collection("installations"),
             review_state: database.collection("review_state"),
             preview_sessions: database.collection("preview_sessions"),
+            review_scheduler: database
+                .collection_with_options("review_scheduler", scheduler_options),
         };
         store.ensure_indexes().await?;
         Ok(store)
@@ -159,8 +439,91 @@ impl Store {
         Self::connect(&uri, &name).await
     }
 
+    async fn review_scheduler_state(&self) -> Result<ReviewSchedulerState> {
+        let Some(mut document) = self
+            .review_scheduler
+            .find_one(doc! { "_id": REVIEW_SCHEDULER_ID })
+            .await
+            .map_err(|err| Error::Forge(format!("could not read review scheduler: {err}")))?
+        else {
+            return Ok(ReviewSchedulerState::default());
+        };
+        document.remove("_id");
+        let mut state: ReviewSchedulerState = bson::deserialize_from_document(document)
+            .map_err(|err| Error::Forge(format!("could not decode review scheduler: {err}")))?;
+        state.normalize_legacy_records();
+        Ok(state)
+    }
+
+    async fn server_now_ms(&self) -> Result<i64> {
+        let reply = self
+            .database
+            .run_command(doc! { "hello": 1 })
+            .await
+            .map_err(|err| Error::Forge(format!("could not read Mongo server time: {err}")))?;
+        reply
+            .get_datetime("localTime")
+            .map(|time| time.timestamp_millis())
+            .map_err(|err| Error::Forge(format!("Mongo hello omitted localTime: {err}")))
+    }
+
+    async fn change_review_scheduler<T>(
+        &self,
+        mut change: impl FnMut(&mut ReviewSchedulerState, i64) -> T,
+    ) -> Result<T> {
+        for _ in 0..REVIEW_SCHEDULER_CAS_RETRIES {
+            let mut state = self.review_scheduler_state().await?;
+            let before = state.clone();
+            let now_ms = self.server_now_ms().await?;
+            let result = change(&mut state, now_ms);
+            if state == before {
+                return Ok(result);
+            }
+            state.revision = before.revision.saturating_add(1);
+            let document = bson::serialize_to_document(&state)
+                .map_err(|err| Error::Forge(format!("could not encode review scheduler: {err}")))?;
+            if document
+                .to_vec()
+                .map_err(|err| Error::Forge(format!("could not size review scheduler: {err}")))?
+                .len()
+                > REVIEW_SCHEDULER_BSON_LIMIT
+            {
+                return Err(Error::ReviewCapacityFull);
+            }
+
+            let updated = self
+                .review_scheduler
+                .update_one(
+                    doc! { "_id": REVIEW_SCHEDULER_ID, "revision": before.revision as i64 },
+                    doc! { "$set": document },
+                )
+                .await
+                .map_err(|err| Error::Forge(format!("could not update review scheduler: {err}")))?;
+            if updated.matched_count == 1 {
+                return Ok(result);
+            }
+            // Another process won the revision CAS. Reload and apply the same
+            // whole-batch operation against its committed state.
+        }
+        Err(Error::Forge(
+            "review scheduler remained contended after bounded retries".into(),
+        ))
+    }
+
     async fn ensure_indexes(&self) -> Result<()> {
         let unique = IndexOptions::builder().unique(true).build();
+
+        // One document is the entire bounded scheduler. A single-document CAS
+        // keeps admission atomic on standalone Mongo deployments; in
+        // particular, a manual batch never depends on replica-set transactions.
+        if let Err(err) = self
+            .review_scheduler
+            .insert_one(doc! { "_id": REVIEW_SCHEDULER_ID, "revision": 0_i64, "unfinished": [], "terminal": [] })
+            .await
+            && !is_duplicate_key(&err)
+        {
+            return Err(Error::Forge(format!("could not initialize review scheduler: {err}")));
+        }
 
         // The whole claim mechanism rests on these being unique: without them a
         // redelivered webhook quietly reviews twice.
@@ -397,6 +760,15 @@ impl Store {
     pub async fn release_lease(&self, key: &str) -> Result<()> {
         self.leases
             .delete_one(doc! { "key": key })
+            .await
+            .map_err(|err| Error::Forge(err.to_string()))?;
+        Ok(())
+    }
+
+    /// Release only the lease still held by this owner generation.
+    pub async fn release_lease_for(&self, key: &str, holder: &str) -> Result<()> {
+        self.leases
+            .delete_one(doc! { "key": key, "holder": holder })
             .await
             .map_err(|err| Error::Forge(err.to_string()))?;
         Ok(())

@@ -1,0 +1,22 @@
+{
+  "key": "cabb5aa254826535",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4458,
+    "output_tokens": 198,
+    "reasoning_tokens": 201,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002724
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change only adds documentation about speech request privacy and does not modify any code behavior; no defects are introduced."
+  }
+}

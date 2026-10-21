@@ -57,6 +57,10 @@ containing directory to discover alternate implementations before reading
 them. Listing uses the same round, per-round and character budgets as other
 lookups; unsafe and sensitive paths are excluded. An unrecorded listing on
 replay stays unavailable rather than claiming the directory is empty.
+The host keeps `NotFound` distinct from `Unavailable`: the first establishes
+that a path is absent at the reviewed head, while the second means the reader
+could not check. A cold index does not change either result because these reads
+come from the pinned tree, not the index.
 
 A path `scan::is_sensitive_path` names — `.env`, a private key, `.netrc` — is
 never read: `read` answers `Unavailable` and says why, and `search` skips the
@@ -85,11 +89,27 @@ settle    the plain schema, told it is the last turn
 **Seeding is the part that pays.** An identifier on an added line followed
 by `(`, or a `Capitalised` one followed by `::` or `{`, is searched for as a
 definition — `fn name(`, `struct Name` — and the doc comment and signature
-above the hit are read. A same-file method the change calls is read further,
-because the unbounded sibling on #2313 was a hundred lines into one. The
-reviewer that asked for exactly these by name found the bug; the one that did
-not ask did not. Fetching them unasked removes the difference, and it costs
-reads rather than a model turn.
+above the hit are read. A changed function signature also seeds a search for
+its callers, and an added out-of-line module declaration reads both valid Rust
+module paths (`name.rs` and `name/mod.rs`) at the reviewed head when the diff
+shows its lexical context. Nested inline modules and explicit `#[path]`
+attributes are resolved when their context is present; otherwise the seed says
+the path is unavailable instead of reporting default candidates as missing.
+At most three caller sites are followed automatically; more matches produce a
+bounded sample labeled incomplete. A same-file method the change calls is read
+further, because the unbounded sibling on #2313 was a hundred lines into one.
+The reviewer that asked for exactly these by name found the bug; the one that
+did not ask did not. Fetching them unasked removes the difference, and it
+costs reads rather than a model turn.
+
+When retrieval is cold, stale or unavailable, critique does not treat that
+silence as proof that callers or files are absent. It caps model confidence at
+Likely and carries eligible findings in a typed, structured advisory lane:
+they appear in the check summary with an explicit unverified label, never as
+inline comments or a blocking verdict. The operator's `note_confidence`
+threshold still applies. This gate makes no extra tree reads, so it honors the
+ordinary lookup setting and shared budget. Independent scanner findings are
+not model findings and are unaffected.
 
 Two host-side follow-ups save a round each: a glob-scoped search that finds
 nothing is retried across the whole tree and the retry is named — the
@@ -139,8 +159,15 @@ positive: a reviewer told a manifest was missing reported it missing.
 
 ## What the falsifier sees
 
-`src/falsify` is handed what the reviewer read, alongside the diff, and is
-told in so many words that a comment cannot disprove a finding. Before that,
+`src/falsify` sees the group's diff and a bounded set of mechanically related
+changed-file excerpts, along with any repository evidence that reviewer read.
+The shared cross-file index links changed module declarations to their module
+files and changed function signatures to changed call sites. Findings remain
+scoped to their group; related excerpts let the reject-only filter catch a
+cross-file contradiction such as a module added beside its declaration
+without replaying the whole pull request for every group. When file or byte
+bounds omit evidence, the prompt says the context is incomplete. It is told
+that a comment cannot disprove a finding. Before that,
 the one correct finding on #2313 survived the reviewer and was deleted by the
 filter, which quoted the diff's own comment — *"this confirms the intent to
 exclude `round_start` itself"* — as proof. The comment was the claim under

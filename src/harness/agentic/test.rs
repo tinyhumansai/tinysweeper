@@ -6,6 +6,113 @@ use crate::ports::model::Message;
 use crate::ports::tree::MockTree;
 use serde_json::json;
 
+#[test]
+fn agentic_budget_refusal_retains_prior_paid_turn_usage() {
+    use openhuman_embed::CoreError;
+    use openhuman_embed::budget::{Budget, Spend, SpendLimits};
+
+    let ledger = Budget::new(SpendLimits {
+        tokens: None,
+        cost_micros: Some(5_000),
+    });
+    ledger
+        .reserve(Spend {
+            tokens: 4,
+            cost_micros: 3_000,
+        })
+        .unwrap()
+        .settle(Spend {
+            tokens: 4,
+            cost_micros: 3_000,
+        });
+    let source = ledger
+        .reserve(Spend {
+            tokens: 4,
+            cost_micros: 4_000,
+        })
+        .unwrap_err();
+
+    let failure = ReviewFailure::core(
+        CoreError::BudgetExceeded {
+            method: "agentic reviewer",
+            source,
+        },
+        "deep",
+        Some(&ledger),
+        Usage::default(),
+    );
+    assert!(matches!(failure.error, Error::Budget { .. }));
+    let usage = failure
+        .usage
+        .expect("budget refusal must retain prior paid turn usage");
+    assert_eq!(usage.input_tokens, 4);
+    assert_eq!(usage.cost_usd, 0.003);
+}
+
+#[tokio::test]
+async fn gateway_review_budget_refusal_keeps_paid_usage_and_budget_remedy() {
+    let _guard = TEST_LOCK.lock().await;
+    use crate::ports::model::Model;
+    let gateway = FakeGateway::start(vec![Reply {
+        status: 200,
+        body: json!({
+            "id":"paid-turn", "object":"chat.completion", "model":"deep",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"read","type":"function","function":{
+                    "name":"repo_read","arguments":json!({"path":"src/lib.rs","start_line":1,"end_line":1}).to_string()
+                }}]},"finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":20,"cost":0.02}
+        }),
+    }])
+    .await;
+    let mut models = crate::config::types::Models {
+        agentic_reviewers: true,
+        base_url: gateway.base_url.clone(),
+        ..Default::default()
+    };
+    models.budget_prices.insert(
+        "deep".into(),
+        crate::config::types::BudgetPriceBound {
+            input: 0.0,
+            cached: 0.0,
+            output: 1_000.0,
+        },
+    );
+    let model = crate::harness::embed::GatewayModel::with_key(&models, "fixture".into())
+        .scoped_budget(0.025)
+        .unwrap();
+    let request = ModelRequest {
+        model: "deep".into(),
+        messages: vec![
+            Message::system("Review."),
+            Message::user("Review src/lib.rs."),
+        ],
+        schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
+        schema_name: "review".into(),
+        reasoning_effort: None,
+        max_tokens: 128,
+    };
+    let tree = MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);
+    let error = model
+        .review(request, &tree, &LookupPolicy::default())
+        .await
+        .expect_err("the second paid model turn exceeds the remaining budget");
+
+    assert_eq!(gateway.requests().len(), 1, "refused turn never dispatches");
+    assert!(matches!(error, Error::Budget { .. }), "{error:?}");
+    let usage = error.usage().expect("first paid turn remains reportable");
+    assert!(usage.input_tokens > 0, "a completed turn is retained");
+    assert_eq!(usage.cost_usd, 0.02);
+    #[cfg(feature = "serve")]
+    {
+        let check = crate::server::failure::check_run("head", &error);
+        assert_eq!(check.title, "The review ran out of budget");
+        assert!(check.summary.contains("models.budget_usd_per_pr"));
+        assert!(!check.summary.contains("response schema"));
+        assert!(!crate::server::failure::is_transient(&error));
+    }
+}
+
 #[tokio::test]
 async fn host_only_reviewer_reads_redacted_source_and_refuses_execution_tools() {
     let _guard = TEST_LOCK.lock().await;
@@ -60,6 +167,7 @@ async fn host_only_reviewer_reads_redacted_source_and_refuses_execution_tools() 
         ],
         schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
         schema_name: "review".into(),
+        reasoning_effort: None,
         max_tokens: 128,
     };
     let response = tokio::time::timeout(
@@ -243,6 +351,7 @@ async fn scripted_billed_fallback(
         ],
         schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
         schema_name: "review".into(),
+        reasoning_effort: None,
         max_tokens: 128,
     };
     struct CountingTree {
@@ -418,6 +527,7 @@ async fn fitting_agent_reviews_dispatch_together_using_inherited_capacity_wait()
         ],
         schema: json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}),
         schema_name: "review".into(),
+        reasoning_effort: None,
         max_tokens: 1000,
     };
     let tree = MockTree::from_files([("src/lib.rs", "pub fn f() {}")]);

@@ -115,6 +115,8 @@ pub fn check_run(head_sha: &str, err: &Error) -> CheckRun {
         conclusion: Some(CheckConclusion::ActionRequired),
         title: title_for(err).to_string(),
         summary: summary_for(err),
+        status: None,
+        external_id: None,
         images: vec![],
     }
 }
@@ -128,6 +130,7 @@ fn title_for(err: &Error) -> &'static str {
         Error::Budget { .. } => "The review ran out of budget",
         Error::Timeout { .. } => "The review ran out of time",
         Error::ReviewLimit { .. } => "The pull request is too large to review safely",
+        Error::ReviewExecutionUnavailable => "The review cannot enforce its large-review limits",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -169,6 +172,11 @@ fn summary_for(err: &Error) -> String {
              ceiling. Split it into smaller pull requests, or ask the tinysweeper operator to \
              raise `review.max_changed_files` or `review.max_changed_lines` if this change is \
              intentionally reviewable as one unit."
+        }
+        Error::ReviewExecutionUnavailable => {
+            "The configured model adapter does not expose the physical-dispatch control required \
+             by large-review mode. Configure a supported model gateway or disable large-review \
+             mode for this deployment."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };
@@ -288,7 +296,8 @@ mod tests {
         // that is actively harmful.
         assert!(!is_transient(&Error::Budget {
             spent: 4.25,
-            limit: 4.0
+            limit: 4.0,
+            usage: None,
         }));
         assert!(!is_transient(&Error::Config("bad preset".into())));
         assert!(!is_transient(&Error::ReviewLimit {
@@ -297,7 +306,22 @@ mod tests {
             changed_lines: 1,
             max_lines: 50_000,
         }));
+        assert!(!is_transient(&Error::ReviewExecutionUnavailable));
         assert!(!is_transient(&Error::lane("critique", "no verdict")));
+    }
+
+    #[test]
+    fn unsupported_large_review_control_has_an_operator_specific_failure() {
+        let error = Error::ReviewExecutionUnavailable;
+        let check = check_run("abc123", &error);
+
+        assert_eq!(
+            title_for(&error),
+            "The review cannot enforce its large-review limits"
+        );
+        assert!(summary_for(&error).contains("physical-dispatch control"));
+        assert_eq!(check.conclusion, Some(CheckConclusion::ActionRequired));
+        assert!(!is_transient(&error));
     }
 
     #[test]

@@ -14,7 +14,9 @@
 //! than per commit because a pull request diff is what the forge gives us —
 //! there is no local checkout to compute a commit range against.
 
-use crate::evidence::diff::FileDiff;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::evidence::diff::{FileDiff, LineKind};
 
 /// The marker that opens a file's block in rendered evidence.
 const FILE_PREFIX: &str = "--- ";
@@ -31,6 +33,295 @@ pub fn render(diffs: &[FileDiff]) -> String {
     // replay would stop matching and every re-review would silently pay full
     // input price with nothing to show for it.
     crate::evidence::diff::render(diffs)
+}
+
+/// Deterministic links between changed files that can contradict one another.
+///
+/// Built once per lane run and borrowed by each group. The index deliberately
+/// links only mechanical relationships visible in the diff: an added module
+/// declaration and its added module file, or a changed function signature and
+/// a changed call site. It is not a substitute for repository lookup.
+pub struct CrossFileEvidenceIndex<'a> {
+    by_path: BTreeMap<&'a str, &'a FileDiff>,
+    related: BTreeMap<&'a str, BTreeSet<&'a str>>,
+}
+
+impl<'a> CrossFileEvidenceIndex<'a> {
+    /// Index changed module declarations and signature/call-site pairs.
+    pub fn new(diffs: &'a [FileDiff]) -> Self {
+        let by_path: BTreeMap<&str, &FileDiff> = diffs
+            .iter()
+            .map(|diff| (diff.path.as_str(), diff))
+            .collect();
+        let mut related: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+
+        for declaration in diffs {
+            for target in added_module_targets(declaration) {
+                if by_path.contains_key(target.as_str()) {
+                    related
+                        .entry(declaration.path.as_str())
+                        .or_default()
+                        .insert(by_path[target.as_str()].path.as_str());
+                    related
+                        .entry(by_path[target.as_str()].path.as_str())
+                        .or_default()
+                        .insert(declaration.path.as_str());
+                }
+            }
+        }
+
+        let changed_signatures: BTreeMap<&str, Vec<&str>> = diffs
+            .iter()
+            .flat_map(|diff| {
+                changed_function_names(diff)
+                    .into_iter()
+                    .map(move |name| (name, diff.path.as_str()))
+            })
+            .fold(BTreeMap::new(), |mut index, (name, path)| {
+                index.entry(name).or_default().push(path);
+                index
+            });
+        for diff in diffs {
+            for name in added_call_names(diff) {
+                if let Some(signatures) = changed_signatures.get(name.as_str()) {
+                    for signature in signatures {
+                        if *signature != diff.path {
+                            related
+                                .entry(signature)
+                                .or_default()
+                                .insert(diff.path.as_str());
+                            related
+                                .entry(diff.path.as_str())
+                                .or_default()
+                                .insert(signature);
+                        }
+                    }
+                }
+            }
+        }
+
+        Self { by_path, related }
+    }
+
+    /// Render a group's own diffs plus bounded changed-file evidence linked to
+    /// them. Omitted files and bytes are disclosed so the falsifier cannot
+    /// treat a partial excerpt as the complete pull request.
+    pub fn render_for(&self, group_diffs: &[FileDiff]) -> String {
+        const MAX_FILES: usize = 8;
+        const MAX_BYTES: usize = 18_000;
+        const TRUNCATION: &str = "\n[Cross-file evidence is incomplete: related files or bytes were omitted by the evidence bound.]\n";
+
+        let mut paths = Vec::new();
+        let mut seen = BTreeSet::new();
+        // Keep the group being reviewed first. Alphabetical ordering used to
+        // let unrelated `a*.rs` files crowd out the anchor under the file cap.
+        for diff in group_diffs {
+            if seen.insert(diff.path.as_str()) {
+                paths.push(diff.path.as_str());
+            }
+        }
+        for diff in group_diffs {
+            if let Some(related) = self.related.get(diff.path.as_str()) {
+                for path in related {
+                    if seen.insert(*path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+        let mut rendered = String::new();
+        let mut incomplete = paths.len() > MAX_FILES;
+        for path in paths.iter().take(MAX_FILES) {
+            let Some(diff) = self.by_path.get(path) else {
+                continue;
+            };
+            let separator = usize::from(!rendered.is_empty());
+            let remaining = MAX_BYTES.saturating_sub(rendered.len() + separator);
+            let (block, cut) = render_bounded(diff, remaining.saturating_sub(TRUNCATION.len()));
+            incomplete |= cut;
+            if separator > 0 {
+                rendered.push('\n');
+            }
+            rendered.push_str(&block);
+            if cut {
+                break;
+            }
+        }
+        if incomplete {
+            if rendered.len() + TRUNCATION.len() > MAX_BYTES {
+                let keep = MAX_BYTES - TRUNCATION.len();
+                let mut boundary = keep.min(rendered.len());
+                while !rendered.is_char_boundary(boundary) {
+                    boundary -= 1;
+                }
+                rendered.truncate(boundary);
+            }
+            rendered.push_str(TRUNCATION);
+        }
+        rendered
+    }
+}
+
+/// Render complete headers and diff lines until the byte bound is reached.
+/// Formatting each line as it is visited avoids first materializing an
+/// unbounded changed file just to throw most of it away.
+fn render_bounded(diff: &FileDiff, limit: usize) -> (String, bool) {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    if diff.hunks.is_empty() {
+        return (out, false);
+    }
+    let header = format!("--- {}\n", crate::scan::scrub(&diff.path));
+    if header.len() > limit {
+        return (out, true);
+    }
+    out.push_str(&header);
+    for hunk in &diff.hunks {
+        let header = format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+        );
+        if out.len() + header.len() > limit {
+            return (out, true);
+        }
+        out.push_str(&header);
+        for line in &hunk.lines {
+            let marker = match line.kind {
+                LineKind::Added => '+',
+                LineKind::Removed => '-',
+                LineKind::Context => ' ',
+            };
+            let mut rendered = String::new();
+            match line.new_line {
+                Some(number) => {
+                    let _ = writeln!(rendered, "{number:>5} {marker}{}", line.text);
+                }
+                None => {
+                    let _ = writeln!(rendered, "      {marker}{}", line.text);
+                }
+            }
+            if out.len() + rendered.len() > limit {
+                return (out, true);
+            }
+            out.push_str(&rendered);
+        }
+    }
+    (out, false)
+}
+
+fn added_module_targets(diff: &FileDiff) -> Vec<String> {
+    let parent = std::path::Path::new(&diff.path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let stem = std::path::Path::new(&diff.path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let base = if matches!(stem, "lib" | "main" | "mod") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    diff.hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.kind == LineKind::Added)
+        .filter_map(|line| {
+            let declaration = ["pub ", "pub(crate) ", "pub(super) ", ""]
+                .iter()
+                .find_map(|prefix| line.text.trim().strip_prefix(prefix))?
+                .strip_prefix("mod ")?
+                .strip_suffix(';')?
+                .trim();
+            (declaration
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !declaration.is_empty())
+            .then(|| {
+                vec![
+                    base.join(format!("{declaration}.rs")),
+                    base.join(declaration).join("mod.rs"),
+                ]
+            })
+        })
+        .flatten()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn function_name(text: &str) -> Option<&str> {
+    let mut rest = text.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("pub(") {
+            rest = after.get(after.find(')')? + 1..)?.trim_start();
+        } else if let Some(after) = ["pub ", "async ", "unsafe ", "const "]
+            .iter()
+            .find_map(|prefix| rest.strip_prefix(prefix))
+        {
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    let tail = rest.strip_prefix("fn ")?;
+    let name = tail.split('(').next()?.trim();
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+    .then_some(name)
+}
+
+fn changed_function_names(diff: &FileDiff) -> BTreeSet<&str> {
+    let removed: BTreeSet<&str> = diff
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.kind == LineKind::Removed)
+        .filter_map(|line| function_name(&line.text))
+        .collect();
+    diff.hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.kind == LineKind::Added)
+        .filter_map(|line| function_name(&line.text))
+        .filter(|name| removed.contains(name))
+        .collect()
+}
+
+fn added_call_names(diff: &FileDiff) -> BTreeSet<String> {
+    let mut calls = BTreeSet::new();
+    for line in diff
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.kind == LineKind::Added)
+    {
+        let bytes = line.text.as_bytes();
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            if !(bytes[cursor].is_ascii_alphabetic() || bytes[cursor] == b'_') {
+                cursor += 1;
+                continue;
+            }
+            let start = cursor;
+            cursor += 1;
+            while cursor < bytes.len()
+                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+            {
+                cursor += 1;
+            }
+            let end = cursor;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'(' {
+                calls.insert(line.text[start..end].to_owned());
+            }
+        }
+    }
+    calls
 }
 
 /// Split `current` into the part `previous` already contained, and the rest.
@@ -143,6 +434,30 @@ mod tests {
         let rendered = render(&[parse_file_patch("src/main.rs", PATCH)]);
         assert!(rendered.starts_with("--- src/main.rs\n"));
         assert!(rendered.contains("2 +    let x = items[i];"), "{rendered}");
+    }
+
+    #[test]
+    fn bounded_cross_file_evidence_keeps_the_reviewed_group_first() {
+        let mut diffs = vec![parse_file_patch(
+            "src/zown.rs",
+            "@@ -1 +1 @@\n-fn changed() {}\n+fn changed(value: u8) {}\n",
+        )];
+        for index in 0..10 {
+            diffs.push(parse_file_patch(
+                &format!("src/a{index}.rs"),
+                &format!("@@ -1 +1 @@\n-fn run() {{}}\n+fn run() {{ changed({index}); }}\n"),
+            ));
+        }
+
+        let evidence = CrossFileEvidenceIndex::new(&diffs).render_for(&diffs[..1]);
+
+        assert!(evidence.starts_with("--- src/zown.rs\n"), "{evidence}");
+        assert!(evidence.contains("fn changed(value: u8)"), "{evidence}");
+        assert!(
+            evidence.contains("Cross-file evidence is incomplete"),
+            "{evidence}"
+        );
+        assert!(evidence.len() <= 18_000, "{} bytes", evidence.len());
     }
 
     #[test]

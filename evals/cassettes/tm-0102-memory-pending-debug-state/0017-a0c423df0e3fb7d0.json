@@ -1,0 +1,22 @@
+{
+  "key": "a0c423df0e3fb7d0",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3891,
+    "output_tokens": 560,
+    "reasoning_tokens": 657,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00033455
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change updates the test to await the asynchronous pending_count call and unwrap its Result, matching the likely async API. No defects are evident in the diff."
+  }
+}

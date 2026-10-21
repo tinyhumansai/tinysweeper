@@ -1,0 +1,33 @@
+{
+  "key": "e3f665c3058da7e6",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4699,
+    "output_tokens": 795,
+    "reasoning_tokens": 567,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004337
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "`ExternalSttProvider::new` now contains `let endpoint: String = endpoint.into();` and sets `endpoint: endpoint.clone()` on the struct, but the function signature does not include an `endpoint` parameter. This results in an undefined variable compile error, preventing the crate from building. The constructor must be updated to accept an `endpoint: impl Into<String>` argument (or the usage of `endpoint` must be removed).",
+        "confidence": 0.97,
+        "existing_code": "let endpoint: String = endpoint.into();\n            endpoint: endpoint.clone(),",
+        "path": "crates/openhuman-core/src/voice/factory/stt_providers.rs",
+        "rule": "missing-parameter",
+        "severity": "high",
+        "suggestion": "    pub fn new(\n        slug: impl Into<String>,\n        endpoint: impl Into<String>,\n        api_key: impl Into<String>,\n        api_style: SttApiStyle,\n    ) -> Self {\n        let endpoint: String = endpoint.into();\n        Self {\n            slug: slug.into(),\n            endpoint: endpoint.clone(),\n            api_style,\n            client: ExternalSttClient::new(\n                reqwest::Client::new(),\n                api_key.into(),\n                api_style,\n            ),\n        }\n    }",
+        "title": "Add missing `endpoint` parameter to constructor"
+      }
+    ],
+    "summary": "The change introduces a compilation error because the `ExternalSttProvider::new` constructor does not accept an `endpoint` argument yet the body references an undefined `endpoint` variable."
+  }
+}

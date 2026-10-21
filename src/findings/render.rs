@@ -8,6 +8,7 @@
 
 use crate::config::types::{LaneId, Severity};
 use crate::findings::types::Finding;
+use crate::markdown::{code_block, code_span, prose, table_cell, table_code_span};
 use crate::ports::model::Usage;
 
 /// Colour and label for each severity, as a shields.io badge.
@@ -86,8 +87,33 @@ pub fn lane_summary(
     version: &str,
     reached_a_verdict: bool,
 ) -> String {
+    lane_summary_inner(summary, findings, version, reached_a_verdict, true)
+}
+
+/// Render a summary whose prose was escaped and whose Markdown was composed
+/// from fixed templates by the end-to-end settlement path.
+pub(crate) fn settled_lane_summary(
+    summary: &str,
+    findings: &[Finding],
+    version: &str,
+    reached_a_verdict: bool,
+) -> String {
+    lane_summary_inner(summary, findings, version, reached_a_verdict, false)
+}
+
+fn lane_summary_inner(
+    summary: &str,
+    findings: &[Finding],
+    version: &str,
+    reached_a_verdict: bool,
+    escape_summary: bool,
+) -> String {
     let mut out = String::with_capacity(1024);
-    out.push_str(summary.trim());
+    if escape_summary {
+        out.push_str(&prose(summary.trim()));
+    } else {
+        out.push_str(summary.trim());
+    }
     out.push_str("\n\n");
 
     if findings.is_empty() {
@@ -114,11 +140,14 @@ pub fn lane_summary(
     out.push_str("| | Finding | Where |\n|---|---|---|\n");
     for finding in &sorted {
         out.push_str(&format!(
-            "| {} | {} | `{}`{} |\n",
+            "| {} | {} | {} |\n",
             badge(finding.severity),
             escape_cell(&finding.title),
-            finding.path,
-            finding.line.map(|l| format!(":{l}")).unwrap_or_default()
+            table_code_span(&format!(
+                "{}{}",
+                finding.path,
+                finding.line.map(|l| format!(":{l}")).unwrap_or_default()
+            ))
         ));
     }
 
@@ -133,10 +162,14 @@ pub fn lane_summary(
 
 /// One finding, folded away.
 fn detail(finding: &Finding) -> String {
-    let location = match finding.line {
-        Some(line) => format!("`{}:{line}`", finding.path),
-        None => format!("`{}`", finding.path),
-    };
+    let location = code_span(&format!(
+        "{}{}",
+        finding.path,
+        finding
+            .line
+            .map(|line| format!(":{line}"))
+            .unwrap_or_default()
+    ));
 
     // Three lines rather than one run-on: where it is, why it was raised, and
     // then the argument. The rule used to be tacked onto the location line
@@ -145,7 +178,7 @@ fn detail(finding: &Finding) -> String {
     let mut out = format!(
         "<details>\n<summary>{} {}</summary>\n\n{} {}{}\n\n{}\n\n{}\n",
         badge(finding.severity),
-        escape_html(&finding.title),
+        prose(&finding.title),
         location,
         confidence_badge(finding.confidence),
         if finding.late {
@@ -154,13 +187,13 @@ fn detail(finding: &Finding) -> String {
             ""
         },
         rule_line(&finding.rule),
-        finding.body.trim(),
+        prose(finding.body.trim()),
     );
 
     if let Some(suggestion) = &finding.suggestion {
         out.push_str(&format!(
-            "\n**Suggested change**\n\n```\n{}\n```\n",
-            suggestion.trim()
+            "\n**Suggested change**\n\n{}\n",
+            code_block(suggestion.trim())
         ));
     }
 
@@ -188,7 +221,7 @@ fn footer(version: &str) -> String {
 /// page. Escaping only pipes here was a bug a test caught — the disclosure
 /// below was escaped and the table above it was not.
 pub fn escape_cell(text: &str) -> String {
-    escape_html(text).replace('|', "\\|")
+    table_cell(text)
 }
 
 /// Render a rule as its own labelled line.
@@ -220,7 +253,7 @@ pub fn rule_line(rule: &str) -> String {
             format!(
                 "**[RULE] {}**: {}",
                 escape_emphasis(head.trim()),
-                escape_cell(rest.trim())
+                prose(rest.trim())
             )
         }
         _ => format!("**[RULE] {}**", escape_emphasis(rule)),
@@ -229,20 +262,11 @@ pub fn rule_line(rule: &str) -> String {
 
 /// Escape model-authored text placed inside a Markdown emphasis run.
 pub fn escape_emphasis(text: &str) -> String {
-    escape_html(text)
-        .replace('\\', "\\\\")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
+    prose(text)
 }
 
 /// A `<summary>` renders as HTML, so a stray tag in a title would break out of
 /// the disclosure and mangle the rest of the page.
-fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// Render the cost line shown under every review.
 ///
 /// Cache hit rate is here rather than buried in a log because it is the number
@@ -270,6 +294,7 @@ pub fn cost_line(usage: &Usage, models: &[String]) -> String {
         line.push_str(&format!(" · {} embedded", thousands(usage.embed_tokens)));
     }
 
+    let models = display_models(models);
     if !models.is_empty() {
         line.push_str(&format!(" · {}", models.join(", ")));
     }
@@ -325,7 +350,7 @@ pub fn cost_table(
     // Nothing but a total means there is no breakdown to align, and a one-row
     // table reads worse than the sentence it replaced.
     if rows.len() < 2 {
-        return format!("```\n{}\n```", cost_line(total, total_models).trim());
+        return code_block(cost_line(total, total_models).trim());
     }
 
     // The last column is never padded: trailing spaces are invisible and only
@@ -337,7 +362,7 @@ pub fn cost_table(
             .unwrap_or(0)
     });
 
-    let mut out = String::from("```\n");
+    let mut out = String::new();
     for cells in &rows {
         let mut line = String::new();
         for (column, cell) in cells.iter().enumerate().take(5) {
@@ -356,8 +381,7 @@ pub fn cost_table(
         out.push_str(line.trim_end());
         out.push('\n');
     }
-    out.push_str("```");
-    out
+    code_block(&out)
 }
 
 /// One row's cells: label, cost, input, output, cache, models.
@@ -371,7 +395,7 @@ fn row(label: &str, usage: &Usage, models: &[String]) -> [String; 6] {
         String::new()
     };
 
-    let mut models = models.join(", ");
+    let mut models = display_models(models).join(", ");
     if usage.embed_tokens > 0 {
         // Embedding spend rides in the model column rather than one of its own,
         // which would be empty on every row of a review that never indexed.
@@ -391,6 +415,17 @@ fn row(label: &str, usage: &Usage, models: &[String]) -> [String; 6] {
         cached,
         models,
     ]
+}
+
+/// Keep absent provider names out of display strings while leaving the usage
+/// totals untouched.
+fn display_models(models: &[String]) -> Vec<&str> {
+    models
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .collect()
 }
 
 /// `12345` reads as `12,345`.
@@ -504,14 +539,12 @@ mod tests {
     #[test]
     fn a_pipe_in_a_title_cannot_break_the_table() {
         // Titles are model output, and a bare `|` ends the cell.
-        let out = lane_summary(
-            "…",
-            &[finding(Severity::High, "Handle a | b")],
-            "0.1.0",
-            true,
-        );
+        let mut item = finding(Severity::High, "Handle a | b");
+        item.path = "src/a|b.rs".into();
+        let out = lane_summary("…", &[item], "0.1.0", true);
         let row = out.lines().find(|l| l.contains("Handle a")).expect("row");
         assert!(row.contains("\\|"), "{row}");
+        assert!(row.contains("`src/a\\|b.rs:42`"), "{row}");
     }
 
     #[test]
@@ -540,6 +573,11 @@ mod tests {
             cost_usd,
             input_tokens: input,
             output_tokens: output,
+            reasoning_tokens: 0,
+            calls_attempted: 0,
+            calls_succeeded: 0,
+            calls_refused: 0,
+            calls_errored: 0,
             cached_tokens: cached,
             embed_tokens: 0,
         }
@@ -563,6 +601,17 @@ mod tests {
         // 0% would read as "the cache missed" rather than "nothing was sent".
         let line = cost_line(&Usage::default(), &[]);
         assert!(!line.contains('%'), "{line}");
+    }
+
+    #[test]
+    fn blank_model_names_are_not_rendered() {
+        let line = cost_line(
+            &usage(0.01, 10, 2, 1),
+            &["provider/model".into(), "".into(), "  ".into()],
+        );
+        assert!(line.contains("provider/model"), "{line}");
+        assert!(!line.contains(", ,"), "{line}");
+        assert!(!line.ends_with(", "), "{line}");
     }
 
     #[test]
@@ -676,6 +725,30 @@ mod cost_table_tests {
         let table = sample();
         assert!(table.starts_with("```\n"), "{table}");
         assert!(table.ends_with("```"), "{table}");
+    }
+
+    #[test]
+    fn provider_metadata_cannot_close_the_cost_code_block() {
+        let hostile = "vendor/model\n```\n@maintainer [click](https://evil.example)\n```";
+        let table = cost_table(
+            &usage(0.02, 100, 10, 0),
+            &[hostile.into()],
+            &[(
+                "critique".into(),
+                usage(0.01, 50, 5, 0),
+                vec![hostile.into()],
+            )],
+        );
+        assert!(table.starts_with("````\n"), "{table}");
+        assert!(table.ends_with("````"), "{table}");
+        assert!(
+            table.contains("```\n@maintainer [click](https://evil.example)"),
+            "{table}"
+        );
+
+        let single = cost_table(&usage(0.01, 50, 5, 0), &[hostile.into()], &[]);
+        assert!(single.starts_with("````\n"), "{single}");
+        assert!(single.ends_with("````"), "{single}");
     }
 
     #[test]

@@ -103,6 +103,12 @@ pub struct FalsifyOutcome {
     pub spend: Spend,
     /// Set when the pass could not run and let everything through.
     pub failed_open: Option<String>,
+    /// A typed host stop that prevented required falsification.
+    ///
+    /// Ordinary provider failures still fail open. A scheduler refusal is
+    /// different: the findings remain available, but their group is partial
+    /// and must not be counted as fully reviewed.
+    pub execution_refusal: Option<crate::ports::model_execution::ModelExecutionRefusal>,
 }
 
 impl FalsifyOutcome {

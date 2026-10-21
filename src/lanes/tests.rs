@@ -29,6 +29,7 @@ use crate::harness::prompt::{self, PromptInputs};
 use crate::harness::schema;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
+    stopped_by_execution_policy,
 };
 use crate::ports::model::Model;
 
@@ -133,9 +134,22 @@ impl Lane for Tests {
         // review, and an unreviewed lane that reports Success is what branch
         // protection approves — a live run against a real pull request is what
         // surfaced it, with every reviewer 404ing and the check still green.
+        let responses = match reviewer_responses(LaneId::Tests, &reviewers, &answers) {
+            Ok(responses) => responses,
+            Err(err @ crate::error::Error::ModelExecutionRefused { refusal, .. }) => {
+                if let Some(outcome) =
+                    stopped_by_execution_policy(LaneId::Tests, changed_paths, llm.spend(), refusal)
+                {
+                    return Ok(outcome);
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
+
         let Some(mut outcome) = aggregate_reviewer_responses(
             LaneId::Tests,
-            reviewer_responses(LaneId::Tests, &reviewers, &answers)?,
+            responses,
             input.diffs,
             Anchoring::Strict,
             input.config.council.corroboration,
@@ -387,11 +401,13 @@ mod lane_tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("lane runs")

@@ -1,0 +1,32 @@
+{
+  "key": "379df187f812cb7d",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4322,
+    "output_tokens": 311,
+    "reasoning_tokens": 209,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00029385
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 250,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/security/credentials/http_creds.rs",
+        "start": 190,
+        "why": "Check the full definition of `PersistedHttpCredentials` and any serde attributes that affect deserialization."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `PersistedHttpCredentials` and any serde attributes to determine if `is_persisted_document` correctly validates the persisted document format."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "key": "fd1ce3abb43dfff4",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3914,
+    "output_tokens": 602,
+    "reasoning_tokens": 650,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003462
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a call to disclose_speech_transfer before transcribing, and based on the visible code there is no concrete defect introduced."
+  }
+}

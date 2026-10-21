@@ -87,6 +87,16 @@ in milliseconds (default `120000`). It applies independently to each route,
 allowing a transport timeout to fall back without disabling the whole-review
 deadline or cancellation. Agent reviewers retain their separate turn deadline.
 
+`models.reasoning_effort` is the fallback used by ordinary requests with no
+override, and `off` is a global kill switch. The operator can set independent
+`models.reviewer_reasoning_effort`, `models.falsify_reasoning_effort`, and
+`models.summary_reasoning_effort` values for critique/security reviewers,
+finding verification, and generated summaries. Built-in defaults are
+`medium`, `low`, and `low`. A request carries its effective override explicitly
+through retries and fallbacks, and cassette identity includes that value.
+These settings affect model cost, so repository configuration cannot override
+them.
+
 ## Review budget admission
 
 Every review lane reserves spend against `models.budget_usd_per_pr`, including
@@ -94,13 +104,31 @@ ordinary and agentic reviewers. A route's `max_tokens = 0` still means no output
 ceiling on the wire, but validation rejects it because admission requires a
 finite output cap. Set a positive cap or omit the route override to inherit
 `models.max_tokens`. With reasoning enabled, the existing 12000-token floor
-also applies.
+also applies to the operator's global and per-route ceilings; lowering effort
+does not bound reasoning-token use. The summary lane retains its existing
+4000-token request cap, so this validation does not promise that every
+individual request receives at least 12000 output tokens.
 
 `models.budget_prices` supplies operator-verified upper rates for gateway
 aliases, in USD per million tokens. Each bound must cover all providers and
 fallbacks behind the alias, including long-context pricing. Input and cached
 input rates must be finite and nonnegative; the output rate must be finite and
 strictly positive. Validation names the alias and field without echoing rates.
+
+## `[review.large_pr]`
+
+Operator-owned size thresholds choose Large mode before paid review work.
+Defaults are `enabled = true`, `files = 30`, `changed_lines = 2000`, and
+`groups = 24`; reaching any threshold selects Large. Groups count eligible
+critique and security work separately. Large selects `max_groups = 12` across
+both lanes and limits the review to `max_calls = 48` physical dispatches.
+
+`soft_deadline_percent = 80` and `drain_seconds = 30` bound new work and draining
+in both modes. Disabling Large selection does not disable this soft stop.
+Numeric limits must be positive and the percentage must be 1–95. Remote
+repository overlays cannot change these settings. See
+[large pull request reviews](../lanes/large-pr.md) for ranking, Full behavior,
+partial coverage and adapter guarantees.
 
 ## `[embeddings]` is a partition key, not a call setting
 

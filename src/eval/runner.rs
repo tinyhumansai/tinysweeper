@@ -26,12 +26,15 @@ use crate::app::review::{Proposal, review_with_tree};
 use crate::config::types::Config;
 use crate::error::Result;
 use crate::eval::corpus::{Corpus, LoadedCase};
-use crate::eval::types::CaseScore;
+use crate::eval::types::{CaseScore, EffectiveCaseBudget, ExecutionLimits};
 use crate::forge::types::RepoId;
 use crate::harness::cassette::{Cassette, Mode};
 use crate::ports::model::{Model, Spend, Usage};
 use crate::ports::tree::TreeReader;
 use crate::state::memory::MemoryState;
+
+const DEFAULT_RECORDING_PHYSICAL_CALLS_PER_CASE: usize = 8;
+const MAX_RECORDING_PHYSICAL_CALLS_PER_CASE: usize = 56;
 
 /// Failure metadata is separate from labels, so re-scoring uses current ground truth.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -54,11 +57,14 @@ pub struct RunOptions {
     /// Store prompts in the cassette. Off by default — a prompt embeds the
     /// reviewed repository's diff.
     pub record_prompts: bool,
-    /// Stop the whole run at this many dollars. Checked between cases.
+    /// Maximum physical model dispatches admitted for each recorded case.
+    /// Recording requires an explicit bound; reservations persist across runs.
+    pub max_physical_calls_per_case: Option<usize>,
+    /// Stop admitting cases once known spend reaches this amount. Checked
+    /// between cases, so the currently running case can take the total over it.
     ///
-    /// Distinct from `models.budget_usd_per_pr`, which the engine already
-    /// enforces per case: this is the ceiling on the *corpus*, so a bad prompt
-    /// cannot turn one command into an unbounded bill.
+    /// Distinct from `models.budget_usd_per_pr`, which the engine applies
+    /// within a case. This is not a provider-side or whole-run hard cap.
     pub max_cost_usd: f64,
     /// A checkout of the case's head, for the reviewer to look things up in
     /// while recording. What it reads is written into the fixture's
@@ -73,6 +79,7 @@ impl Default for RunOptions {
             record: false,
             loose: false,
             record_prompts: false,
+            max_physical_calls_per_case: Some(DEFAULT_RECORDING_PHYSICAL_CALLS_PER_CASE),
             max_cost_usd: 5.0,
             tree: None,
         }
@@ -86,9 +93,11 @@ pub struct RunOutcome {
     pub scores: Vec<CaseScore>,
     /// Answers served by call order rather than by key, across the run.
     pub loose_replays: usize,
-    /// A hash of the effective configuration, so two runs are comparable only
-    /// when they were configured the same way.
+    /// A hash of score-affecting configuration inputs. Run and case bounds are
+    /// persisted separately in `execution_limits`.
     pub config_digest: String,
+    /// The selected cases and their effective run/admission limits.
+    pub execution_limits: ExecutionLimits,
     /// Cases not run because the corpus ceiling was reached.
     pub skipped: Vec<String>,
 }
@@ -114,6 +123,18 @@ pub async fn run(
             "recording needs a live model; build with --features harness",
         ));
     }
+    if options.record
+        && !matches!(
+            options.max_physical_calls_per_case,
+            Some(1..=MAX_RECORDING_PHYSICAL_CALLS_PER_CASE)
+        )
+    {
+        return Err(crate::error::Error::config(format!(
+            "recording requires --max-physical-calls-per-case between 1 and {MAX_RECORDING_PHYSICAL_CALLS_PER_CASE}"
+        )));
+    }
+
+    let mut execution_limits = effective_execution_limits(corpus, &config, options);
 
     // `--tree` names one checkout on disk, but every case in the run would
     // otherwise be handed the same one regardless of which repository or
@@ -132,11 +153,41 @@ pub async fn run(
     let mut skipped = Vec::new();
     let mut loose_replays = 0usize;
     let mut spent = 0.0f64;
+    let mut unknown_charge = false;
 
     for case in &corpus.cases {
-        if spent >= options.max_cost_usd {
+        if unknown_charge || spent >= options.max_cost_usd {
             skipped.push(case.case.id.clone());
             continue;
+        }
+
+        let reservation = if options.record {
+            Some(crate::eval::recording_budget::Reservation::begin(
+                &corpus.root.join("recording-attempts").join(&case.case.id),
+                options
+                    .max_physical_calls_per_case
+                    .expect("recording cap validated"),
+                // The selected CLI ceiling is cumulative across reruns; the
+                // hard maximum only bounds which ceiling the operator may set.
+                options
+                    .max_physical_calls_per_case
+                    .expect("recording cap validated"),
+            )?)
+        } else {
+            None
+        };
+        if let Some(reservation) = &reservation {
+            let budget = execution_limits
+                .effective_case_budgets
+                .iter_mut()
+                .find(|budget| budget.case_id == case.case.id)
+                .expect("selected case has an execution budget");
+            budget.max_physical_calls_per_case = Some(reservation.reserved_calls());
+            archive_prior_takes(
+                &case.cassette_dir(&corpus.root),
+                reservation.directory(),
+                reservation.id(),
+            )?;
         }
 
         // A case whose cassette cannot be opened is scored as failed, not
@@ -164,6 +215,9 @@ pub async fn run(
             .tree
             .as_ref()
             .filter(|_| options.record)
+            // A path supplied on disk is not proof that its contents are the
+            // fixture's head. Leave the reader's revision unknown; callers
+            // that verify a checkout can provide a reader with a real pin.
             .map(crate::ports::tree::DirTree::new);
         let recorded = crate::ports::tree::MockTree::from_recorded(case.fixture.lookups.clone());
         let recording = dir_tree
@@ -173,7 +227,26 @@ pub async fn run(
             Some(recording) => recording,
             None => &recorded,
         };
-        let outcome = review_case(case, &with_lanes(&config, case), cassette.clone(), tree).await;
+        let mut case_config = with_lanes(&config, case);
+        if let Some(budget) = execution_limits
+            .effective_case_budgets
+            .iter()
+            .find(|budget| budget.case_id == case.case.id)
+            .and_then(|budget| budget.budget_usd)
+        {
+            case_config.models.budget_usd_per_pr = budget;
+        }
+        let (outcome, physical_calls) = review_case(
+            case,
+            &case_config,
+            cassette.clone(),
+            tree,
+            reservation.as_ref().map(|r| r.reserved_calls()),
+        )
+        .await;
+        if let Some(reservation) = reservation {
+            reservation.finish(physical_calls)?;
+        }
         let wall = started.elapsed();
 
         if let Some(recording) = &recording {
@@ -206,6 +279,10 @@ pub async fn run(
         // never having produced a proposal to sum. Recorded usage replayed
         // verbatim, so the ceil works offline too.
         spent += cassette.cost_usd();
+        // A refusal without usage may still have incurred a provider charge.
+        // Stop before admitting another case instead of spending against an
+        // unknowable remainder of the shared ceiling.
+        unknown_charge |= cassette.has_unreported_usage();
 
         let score = match outcome {
             Ok(proposal) => {
@@ -241,8 +318,44 @@ pub async fn run(
         scores,
         loose_replays,
         config_digest,
+        execution_limits,
         skipped,
     })
+}
+
+fn effective_execution_limits(
+    corpus: &Corpus,
+    config: &Config,
+    options: &RunOptions,
+) -> ExecutionLimits {
+    let selected_case_ids = corpus
+        .cases
+        .iter()
+        .map(|case| case.case.id.clone())
+        .collect();
+    let effective_case_budgets = corpus
+        .cases
+        .iter()
+        .map(|case| EffectiveCaseBudget {
+            case_id: case.case.id.clone(),
+            budget_usd: (options.record && !corpus.cases.is_empty()).then(|| {
+                config
+                    .models
+                    .budget_usd_per_pr
+                    .min(case.case.budget.max_cost_usd)
+                    .min(options.max_cost_usd / corpus.cases.len() as f64)
+            }),
+            max_physical_calls_per_case: None,
+        })
+        .collect();
+    ExecutionLimits {
+        selected_case_ids,
+        max_cost_usd: options.max_cost_usd,
+        max_physical_calls_per_case: options.max_physical_calls_per_case,
+        recording: options.record,
+        loose_replay: options.loose,
+        effective_case_budgets,
+    }
 }
 
 /// Review one case against a fresh, empty state store.
@@ -251,7 +364,8 @@ async fn review_case(
     config: &Config,
     model: Arc<Cassette>,
     tree: &dyn TreeReader,
-) -> Result<Proposal> {
+    max_physical_calls: Option<usize>,
+) -> (Result<Proposal>, usize) {
     let forge = case.forge();
     let store = MemoryState::new();
     let repo = RepoId::parse(&case.case.provenance.repo).unwrap_or_else(|| RepoId {
@@ -259,18 +373,58 @@ async fn review_case(
         name: case.case.id.clone(),
     });
 
-    review_with_tree(
-        &forge,
-        model,
-        config,
-        &repo,
-        case.fixture.pull_request.number,
-        Some(&store),
-        None,
-        None,
-        Some(tree),
-    )
-    .await
+    if let Some(max_calls) = max_physical_calls {
+        let started_at = tokio::time::Instant::now();
+        let execution = Arc::new(crate::app::review_execution::ReviewRunContext::new(
+            crate::app::review_execution::ReviewExecutionOptions {
+                started_at,
+                hard_deadline: started_at + std::time::Duration::from_secs(900),
+                #[cfg(test)]
+                mode: crate::lanes::large_pr::ReviewMode::Normal,
+                max_calls: Some(max_calls),
+                soft_deadline_percent: config.review.large_pr.soft_deadline_percent,
+                drain_seconds: config.review.large_pr.drain_seconds,
+            },
+        ));
+        let binding = execution.bind_model(model, config.models.budget_usd_per_pr);
+        #[cfg(not(test))]
+        if !binding.execution_control_bound {
+            return (Err(crate::error::Error::ReviewExecutionUnavailable), 0);
+        }
+        let outcome = crate::app::review::review_with_tree_observed_at_head_in_run(
+            &forge,
+            binding.model.clone(),
+            config,
+            &repo,
+            case.fixture.pull_request.number,
+            Some(&store),
+            None,
+            None,
+            Some(tree),
+            None,
+            execution.clone(),
+            None,
+        )
+        .await;
+        let calls = execution.execution().snapshot().committed_calls;
+        (outcome, calls)
+    } else {
+        (
+            review_with_tree(
+                &forge,
+                model,
+                config,
+                &repo,
+                case.fixture.pull_request.number,
+                Some(&store),
+                None,
+                None,
+                Some(tree),
+            )
+            .await,
+            0,
+        )
+    }
 }
 
 /// The configuration a corpus run is allowed to use.
@@ -313,6 +467,48 @@ fn open_cassette(
         Mode::Strict
     };
     Ok(Arc::new(Cassette::replay(dir, mode)?))
+}
+
+/// Move prior takes out of the active replay directory before a new recording.
+///
+/// This runs only after the persistent physical-call reservation succeeds, so
+/// a rejected rerun never changes the cassette. The attempt archive lives next
+/// to the append-only audit and is not loaded by cassette replay.
+fn archive_prior_takes(
+    cassette_dir: &std::path::Path,
+    audit_dir: &std::path::Path,
+    id: &str,
+) -> Result<()> {
+    let entries = match std::fs::read_dir(cassette_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(crate::error::Error::path(cassette_dir, err)),
+    };
+    let mut takes = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| crate::error::Error::path(cassette_dir, err))?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+        {
+            takes.push(path);
+        }
+    }
+    if takes.is_empty() {
+        return Ok(());
+    }
+    takes.sort();
+    let archive_dir = audit_dir.join("prior-takes").join(id);
+    std::fs::create_dir_all(&archive_dir)
+        .map_err(|err| crate::error::Error::path(&archive_dir, err))?;
+    for source in takes {
+        let destination = archive_dir.join(source.file_name().expect("take path has a filename"));
+        std::fs::rename(&source, &destination)
+            .map_err(|err| crate::error::Error::path(&source, err))?;
+    }
+    Ok(())
 }
 
 /// Re-score proposals already on disk, without calling anything.
@@ -513,6 +709,18 @@ pub fn digest_of(config: &Config) -> String {
     field(b"fallback\0", models.fallback.join(",").as_bytes());
     field(b"max_tokens\0", &models.max_tokens.to_le_bytes());
     field(b"reasoning_effort\0", models.reasoning_effort.as_bytes());
+    field(
+        b"reviewer_reasoning_effort\0",
+        models.reviewer_reasoning_effort.as_bytes(),
+    );
+    field(
+        b"falsify_reasoning_effort\0",
+        models.falsify_reasoning_effort.as_bytes(),
+    );
+    field(
+        b"summary_reasoning_effort\0",
+        models.summary_reasoning_effort.as_bytes(),
+    );
     // Preserve historical one-shot digests, but never compare an agentic
     // tool run or different physical-call admission bounds as the same run.
     if models.agentic_reviewers {

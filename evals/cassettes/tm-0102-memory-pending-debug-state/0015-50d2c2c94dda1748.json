@@ -1,0 +1,22 @@
+{
+  "key": "50d2c2c94dda1748",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 9166,
+    "output_tokens": 969,
+    "reasoning_tokens": 1035,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00070055
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added pending store implementation and its tests appear correct; no defects are evident."
+  }
+}

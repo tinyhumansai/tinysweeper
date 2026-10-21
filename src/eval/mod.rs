@@ -40,6 +40,7 @@
 #[path = "committed_test.rs"]
 mod committed_test;
 pub mod corpus;
+mod recording_budget;
 pub mod report;
 pub mod runner;
 pub mod score;
@@ -51,4 +52,6 @@ pub use crate::eval::runner::{
     RunOptions, RunOutcome, read_scorecard, rescore, run, write_scorecard,
 };
 pub use crate::eval::score::score;
-pub use crate::eval::types::{Case, CaseScore, Fixture, Scorecard, Verdict};
+pub use crate::eval::types::{
+    Case, CaseScore, EffectiveCaseBudget, ExecutionLimits, Fixture, Scorecard, Verdict,
+};

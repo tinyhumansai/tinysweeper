@@ -1,0 +1,34 @@
+{
+  "key": "e173eda401ddedd2",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4137,
+    "output_tokens": 1033,
+    "reasoning_tokens": 932,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004651
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "A new `endpoint: String` field is added to `ExternalTtsProvider` and the constructor now expects an `endpoint` argument (see the inserted `let endpoint: String = endpoint.into();` and the field initialization). Existing code that creates an `ExternalTtsProvider` without providing this argument will fail to compile, causing a regression. Callers must be updated to pass a suitable endpoint value or the struct should provide a default/optional value.",
+        "confidence": 0.7,
+        "existing_code": "pub struct ExternalTtsProvider {\n    slug: String,\n    endpoint: String,\n    default_voice: String,\n    api_style: TtsApiStyle,\n    client: ExternalTtsClient,",
+        "late": false,
+        "path": "crates/openhuman-core/src/voice/factory/tts_providers.rs",
+        "rule": "breaking-api",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add required `endpoint` field breaks existing constructors"
+      }
+    ],
+    "summary": "The change adds an `endpoint` field and logs speech transfers, but it introduces a breaking API change that will require all callers of `ExternalTtsProvider::new` to supply an endpoint argument, potentially causing compilation failures if not updated."
+  }
+}

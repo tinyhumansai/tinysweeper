@@ -34,6 +34,26 @@ pub trait ForgeRead: Send + Sync {
     /// Fetch a pull request.
     async fn pull_request(&self, repo: &RepoId, number: u64) -> Result<PullRequest>;
 
+    /// Fetch only the live fields needed to validate queue admission.
+    ///
+    /// Implementations should avoid approvals and review context reads. The
+    /// default preserves compatibility for adapters while server production
+    /// uses the narrow GitHub and mock implementations.
+    async fn pull_request_metadata(
+        &self,
+        repo: &RepoId,
+        number: u64,
+    ) -> Result<crate::forge::types::PullRequestMetadata> {
+        let pull_request = self.pull_request(repo, number).await?;
+        Ok(crate::forge::types::PullRequestMetadata {
+            number: pull_request.number,
+            author: pull_request.author,
+            head_sha: pull_request.head_sha,
+            open: pull_request.open,
+            draft: pull_request.draft,
+        })
+    }
+
     /// Fetch the files a pull request changed.
     async fn changed_files(&self, repo: &RepoId, number: u64) -> Result<Vec<ChangedFile>>;
 
@@ -71,6 +91,16 @@ pub trait ForgeRead: Send + Sync {
     /// otherwise report "no checks", and a gate that cannot see a red check is
     /// worse than no gate.
     async fn check_runs(&self, repo: &RepoId, sha: &str) -> Result<Vec<CheckStatus>>;
+
+    /// Find a previously published check by its stable external recovery key.
+    async fn check_run_by_external_id(
+        &self,
+        _repo: &RepoId,
+        _sha: &str,
+        _external_id: &str,
+    ) -> Result<Option<u64>> {
+        Ok(None)
+    }
 
     /// Every review left on a pull request, oldest first.
     ///

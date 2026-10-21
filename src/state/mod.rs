@@ -10,4 +10,4 @@ pub mod memory;
 pub mod types;
 
 pub use crate::state::memory::MemoryState;
-pub use crate::state::types::{ReviewedState, key};
+pub use crate::state::types::{PublishedReview, ReviewUsage, ReviewedState, key};

@@ -62,9 +62,11 @@ impl Lane for Commits {
         let scanner = input.scanner_findings_of(&ADJUDICATES);
 
         if scanner.is_empty() {
-            return Ok(LaneOutcome::skipped(
-                "Nothing sensitive found in what this pull request commits.",
-            ));
+            return Ok(LaneOutcome {
+                summary: "No sensitive content in committed files.".into(),
+                completed: true,
+                ..LaneOutcome::default()
+            });
         }
 
         // Deliberately *not* skipped for a draft. Every other lane defers on a
@@ -74,7 +76,10 @@ impl Lane for Commits {
 
         // `LaneOutcome::default()` rather than a model response: this lane no
         // longer has one, so there is no spend to record and nothing to anchor.
-        let mut outcome = LaneOutcome::default();
+        let mut outcome = LaneOutcome {
+            completed: true,
+            ..LaneOutcome::default()
+        };
         merge_scanner_findings(&mut outcome, &scanner);
 
         outcome.summary = match outcome.findings.len() {
@@ -112,6 +117,7 @@ mod tests {
     use super::*;
     use crate::config::types::{Config, Severity};
     use crate::evidence::diff::{FileDiff, parse_file_patch};
+    use crate::forge::types::CheckConclusion;
     use crate::forge::types::{Commit, PullRequest};
     use crate::ports::model::Spend;
     use crate::scan::types::{Finding as ScanFinding, redact};
@@ -193,11 +199,13 @@ mod tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("lane runs")
@@ -227,13 +235,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commits_with_nothing_sensitive_in_them_are_not_reported_at_all() {
-        // The behaviour this change exists to remove: an opinion about the
-        // commit messages. A clean range now produces a skip, not a critique.
+    async fn commits_with_nothing_sensitive_are_a_successful_clean_scan() {
         let outcome = run_with(&config(), &commits(), &[], false).await;
 
         assert!(outcome.findings.is_empty(), "{outcome:?}");
-        assert!(outcome.skipped.is_some(), "{outcome:?}");
+        assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Success);
+        assert_eq!(outcome.summary, "No sensitive content in committed files.");
+        assert!(outcome.skipped.is_none(), "{outcome:?}");
     }
 
     #[tokio::test]

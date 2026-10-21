@@ -1,0 +1,34 @@
+{
+  "key": "6126a3c55ff50132",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4266,
+    "output_tokens": 1003,
+    "reasoning_tokens": 829,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00046405
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The egress module is added without a `#[cfg(feature = \"voice\")]` guard. If this module depends on voice‑specific code or crates, building the crate with the `voice` feature disabled will now fail with unresolved imports or missing types. Add the same cfg attribute that guards the other voice modules to prevent this regression.",
+        "confidence": 0.95,
+        "existing_code": "mod egress;",
+        "path": "crates/openhuman-core/src/voice/mod.rs",
+        "rule": "missing-cfg",
+        "severity": "high",
+        "suggestion": "#[cfg(feature = \"voice\")]\nmod egress;",
+        "title": "Guard the egress module with cfg(feature = \"voice\")"
+      }
+    ],
+    "lookups": [],
+    "summary": "The newly added `mod egress;` is not guarded by the `#[cfg(feature = \"voice\")]` attribute, which likely causes compilation failures when the \"voice\" feature is disabled."
+  }
+}

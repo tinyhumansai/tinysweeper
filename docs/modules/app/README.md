@@ -50,13 +50,16 @@ order:
    needs a human.
 4. **Comment** — everything else.
 
-**Complete** means `Proposal::unreviewed` is empty — no file changed that the
-forge declined to show us. This is the job the aggregate `tinysweeper/gate`
-check run used to do by degrading itself to `Neutral`. That check is gone, and
-the approval is the whole verdict now, so it has to carry what the check
-carried: a file nobody saw is not a file anyone can vouch for. Nothing blocks,
-so there is nothing to object to — and nothing to endorse either, which is a
-`Comment`.
+Lane check titles use deterministic finding counts and, when a lane reports it,
+its reviewed-versus-unanswered file counts. They never quote or cut off
+model-authored summary prose; that explanation belongs in the check body.
+
+**Complete** requires no unreviewed files or unanswered lane work. Missing
+patches, groups omitted by Large selection, and work interrupted by call or time
+limits prevent approval. A stopped lane is Neutral unless a qualifying finding
+still makes it Failure; partial coverage never weakens a known blocking defect.
+The host records these facts in `Proposal.partial_review` and publishes actual
+coverage through the existing apply path. See [bounded review planning](../lanes/large-pr.md).
 
 **Not a draft** closes a trap. With `review.draft_prs = false` every lane skips
 a draft, so the proposal comes back with nothing blocking and nothing
@@ -69,9 +72,23 @@ ever blocked.
 
 Four bounds on approving, all deliberate. It reads the *gate*, not the blocking
 threshold, so `request_changes_at = "off"` stops tinysweeper objecting without
-starting it endorsing a red pull request. And an approval that already stands is
-not restated, or every push to a clean pull request would add a review that
-changes nothing.
+starting it endorsing a red pull request. A known, successfully published
+decision is not restated when its verdict and stable blocking-finding identities
+are unchanged. Comment publications also record whether coverage was complete:
+a newly required incomplete-coverage warning replaces an earlier complete
+comment, while repeated incomplete comments dedupe after that warning is
+published. Checks and the review hub still update on every push. Old state
+without a publication record cannot certify a duplicate. Approvals are only
+deduped for complete current-head reviews while forge history still shows the
+actual approval at the SHA of the successful publication. A partial review
+continues to withdraw any standing approval. Advisory comments record the
+standing forge review separately, because GitHub may keep an earlier approval
+or changes request in force after a comment; legacy receipts without that
+snapshot dedupe only when a live comment still names the published head.
+
+Review comments keep one total-spend line inside collapsed diagnostics. Token,
+cache and embedding counts stay in the hidden state marker and review timing
+record; they remain available in durable review state for the latest pass.
 
 ## `local-review`
 

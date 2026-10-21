@@ -1,0 +1,31 @@
+{
+  "key": "3d20ae69475d3827",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8129,
+    "output_tokens": 1508,
+    "reasoning_tokens": 1691,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00078345
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "crates/**/*.rs",
+        "kind": "search",
+        "pattern": "fn is_persisted_document",
+        "why": "Confirm signature and behavior used in eligible"
+      }
+    ],
+    "resolved": [],
+    "summary": "No clear defects identified; the changes introduce validation and candidate listing without apparent functional regressions."
+  }
+}

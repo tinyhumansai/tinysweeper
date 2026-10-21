@@ -35,6 +35,7 @@ use crate::index::mongo::MongoIndex;
 use crate::index::types::EmbedSignature;
 use crate::indexer::fetch::Checkout;
 use crate::indexer::mongo::MongoManifest;
+use crate::indexer::repository_cache::RepositoryCache;
 use crate::indexer::run::Indexer;
 use crate::indexer::types::IndexOutcome;
 use crate::ports::embed::Embedder;
@@ -78,6 +79,8 @@ pub struct IndexBackend {
     pub manifest: Arc<MongoManifest>,
     /// The partition key, cached from the embedder.
     pub signature: EmbedSignature,
+    /// Shared bare Git mirrors used by indexing and reviews.
+    pub repository_cache: RepositoryCache,
 }
 
 impl std::fmt::Debug for IndexBackend {
@@ -96,7 +99,7 @@ impl IndexBackend {
     /// configured and could not be opened, which is a mistake rather than a
     /// choice and must not be papered over as "retrieval off" — a silently
     /// unindexed reviewer still posts reviews, just worse ones.
-    pub async fn open(config: &Config) -> Result<Option<Self>> {
+    pub async fn open(config: &Config, repository_cache: RepositoryCache) -> Result<Option<Self>> {
         let Some(embedder) = crate::index::embedder_from_config(&config.embeddings)? else {
             return Ok(None);
         };
@@ -115,6 +118,7 @@ impl IndexBackend {
             index: Arc::new(index),
             manifest: Arc::new(manifest),
             signature,
+            repository_cache,
         }))
     }
 
@@ -147,7 +151,10 @@ impl IndexBackend {
         // Read-only, and read-only on purpose: this is the same boundary the
         // review runs against. The write token is minted separately, in
         // `routes.rs`, after every model call has returned.
-        let checkout = Checkout::fetch(&git_host(), &repo_id, revision, token).await?;
+        let checkout = self
+            .repository_cache
+            .checkout(&git_host(), &repo_id, revision, token)
+            .await?;
         let unfetched = checkout
             .fetch_submodules(&git_host(), token, &config.retrieval.submodules)
             .await?;
@@ -519,10 +526,13 @@ mod tests {
         // before an index existed.
         let config = Config::default();
         assert!(
-            IndexBackend::open(&config)
-                .await
-                .expect("a disabled section is a choice")
-                .is_none()
+            IndexBackend::open(
+                &config,
+                RepositoryCache::at(tempfile::tempdir().unwrap().path().join("cache")).unwrap(),
+            )
+            .await
+            .expect("a disabled section is a choice")
+            .is_none()
         );
     }
 }

@@ -1,0 +1,38 @@
+{
+  "key": "07115fca3c6b0770",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4226,
+    "output_tokens": 313,
+    "reasoning_tokens": 108,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00028955
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry",
+        "pattern": "mod oauth",
+        "why": "Locate the oauth module file to inspect whether the newly added identifiers are defined."
+      },
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/tinymcp/src/registry/oauth.rs",
+        "start": 1,
+        "why": "Check the definitions of MemoryPendingStore, PENDING_TTL_SECS, PendingAuthorization, and PendingAuthorizationStore to ensure they exist and are public."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to verify that the newly imported symbols (MemoryPendingStore, PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore) exist and are correctly defined in the oauth module; without confirming these definitions, we cannot determine if the change introduces compilation errors."
+  }
+}

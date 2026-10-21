@@ -1,0 +1,32 @@
+{
+  "key": "41d93caa260d212d",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4344,
+    "output_tokens": 338,
+    "reasoning_tokens": 244,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003017
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/tinymcp/src/registry/oauth.rs",
+        "start": 1,
+        "why": "Check that the newly added symbols are defined and publicly accessible."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to verify that the newly re-exported identifiers (MemoryPendingStore, PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore) are defined in the repository so the change compiles."
+  }
+}

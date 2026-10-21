@@ -328,6 +328,11 @@ enum EvalCommand {
         #[arg(long, default_value_t = 5.0)]
         max_cost_usd: f64,
 
+        /// Maximum cumulative physical dispatches per case across recording reruns.
+        /// Defaults to 8 and cannot exceed 56; persisted attempts consume this limit.
+        #[arg(long, default_value_t = 8)]
+        max_physical_calls_per_case: usize,
+
         /// A checkout of the case's head, for the reviewer to look things
         /// up in while recording.
         ///
@@ -570,6 +575,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
             record_prompts,
             loose,
             max_cost_usd,
+            max_physical_calls_per_case,
             tree,
         } => {
             let loaded =
@@ -586,6 +592,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
                 record,
                 loose,
                 record_prompts,
+                max_physical_calls_per_case: Some(max_physical_calls_per_case),
                 max_cost_usd,
                 tree,
             };
@@ -594,6 +601,7 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
             let card = eval::Scorecard {
                 corpus_digest: corpus_data.digest.clone(),
                 config_digest: outcome.config_digest.clone(),
+                execution_limits: Some(outcome.execution_limits.clone()),
                 loose_replays: outcome.loose_replays,
                 cases: outcome.scores,
             };
@@ -614,17 +622,27 @@ async fn run_eval(command: EvalCommand) -> Result<()> {
         } => {
             let loaded =
                 tinysweeper::config::load_validated(std::path::Path::new("."), config.as_deref())?;
+            let previous = eval::read_scorecard(&run.join("scorecard.json")).ok();
             let corpus_data = eval::load(&corpus)?;
+            let corpus_data = match previous
+                .as_ref()
+                .and_then(|card| card.execution_limits.as_ref())
+            {
+                Some(limits) => corpus_data.select(&limits.selected_case_ids)?,
+                None => corpus_data,
+            };
             let scores = eval::rescore(&corpus_data, &run)?;
 
             // Re-scoring reads proposals, not cassettes, so nothing is replayed
             // here. `loose_replays` does not describe this command, though — it
             // describes the run whose proposals are being scored, so carry the
             // recorded figure over rather than erasing it from the scorecard.
-            let previous = eval::read_scorecard(&run.join("scorecard.json")).ok();
             let card = eval::Scorecard {
                 corpus_digest: corpus_data.digest.clone(),
                 config_digest: eval::runner::digest_of(&loaded.config),
+                execution_limits: previous
+                    .as_ref()
+                    .and_then(|card| card.execution_limits.clone()),
                 loose_replays: previous
                     .as_ref()
                     .map(|card| card.loose_replays)
@@ -920,6 +938,25 @@ fn short(sha: &str) -> &str {
     &sha[..sha.len().min(8)]
 }
 
+/// Describe whether applying a proposal actually published its review.
+#[cfg(any(feature = "github", test))]
+fn apply_confirmation(
+    disposition: tinysweeper::app::apply::ApplyDisposition,
+    check_runs: usize,
+) -> String {
+    use tinysweeper::app::apply::ApplyDisposition;
+
+    match disposition {
+        ApplyDisposition::Published => format!("published {check_runs} check run(s)"),
+        ApplyDisposition::Superseded => {
+            "skipped publishing: the pull request head changed before publication".into()
+        }
+        ApplyDisposition::Closed => {
+            "skipped publishing: the pull request is closed or merged".into()
+        }
+    }
+}
+
 /// Publish a proposal. No model key reaches this path.
 #[cfg(feature = "github")]
 async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()> {
@@ -935,9 +972,10 @@ async fn run_apply(repo: &str, pr: u64, findings: &std::path::Path) -> Result<()
     let loaded = tinysweeper::config::load_validated(std::path::Path::new("."), None)?;
     let read = GitHubRead::from_env()?;
     let write = GitHubWrite::from_env()?;
-    tinysweeper::app::apply(&read, &write, &loaded.config, &proposal, None).await?;
+    let disposition =
+        tinysweeper::app::apply(&read, &write, &loaded.config, &proposal, None).await?;
 
-    println!("published {} check run(s)", proposal.lanes.len());
+    println!("{}", apply_confirmation(disposition, proposal.lanes.len()));
     Ok(())
 }
 
@@ -1543,6 +1581,24 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
+    fn apply_confirmation_matches_the_publication_disposition() {
+        use tinysweeper::app::apply::ApplyDisposition;
+
+        assert_eq!(
+            apply_confirmation(ApplyDisposition::Published, 3),
+            "published 3 check run(s)"
+        );
+        assert_eq!(
+            apply_confirmation(ApplyDisposition::Superseded, 3),
+            "skipped publishing: the pull request head changed before publication"
+        );
+        assert_eq!(
+            apply_confirmation(ApplyDisposition::Closed, 3),
+            "skipped publishing: the pull request is closed or merged"
+        );
+    }
+
+    #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
     }
@@ -1822,6 +1878,7 @@ mod tests {
             overview: None,
             wireframe: None,
             unreviewed: vec![],
+            partial_review: None,
             skipped: None,
             version: tinysweeper::app::review::PROPOSAL_VERSION,
             repo: repo.into(),
@@ -1834,6 +1891,8 @@ mod tests {
             cached_tokens: 0,
             embed_tokens: 0,
             models: vec![],
+            completion_accounting: None,
+            logical_usage: None,
             threads: Default::default(),
         }
     }

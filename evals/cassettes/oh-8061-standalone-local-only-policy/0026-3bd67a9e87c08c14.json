@@ -1,0 +1,22 @@
+{
+  "key": "3bd67a9e87c08c14",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4222,
+    "output_tokens": 552,
+    "reasoning_tokens": 625,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003491
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an endpoint field and uses it in the provider, but apart from the previously identified missing constructor parameter, no new defects are introduced."
+  }
+}

@@ -10,7 +10,7 @@
 # `.github/workflows/deploy.yml` reaches this stack over SSH and runs the two
 # commands in `deploy/README.md`.
 #
-# Three differences from the base file, and only three:
+# Differences from the base file:
 #
 #   * The server is the image CI published to GHCR, not a local build. The box
 #     never compiles anything — a `cargo build` on a shared droplet takes
@@ -23,6 +23,9 @@
 #     is what `manual-review.yml` authenticates with, `TINYSWEEPER_ALLOWED_ORG`
 #     is what the server bounds those manual reviews to, and Langfuse is
 #     optional but production is the one place it is worth turning on.
+#   * A named volume for the shared Git object cache. Keeping it outside the
+#     image preserves fetched objects across server replacements without
+#     persisting installation credentials.
 
 services:
   tinysweeper:
@@ -38,10 +41,13 @@ services:
       TINYSWEEPER_PREVIEW_TOKEN: ${TINYSWEEPER_PREVIEW_TOKEN:-}
       TINYSWEEPER_MCP_TOKEN: ${TINYSWEEPER_MCP_TOKEN:-}
       TINYSWEEPER_ALLOWED_ORG: ${TINYSWEEPER_ALLOWED_ORG:-tinyhumansai}
+      TINYSWEEPER_REPOSITORY_CACHE_DIR: ${TINYSWEEPER_REPOSITORY_CACHE_DIR:-/var/cache/tinysweeper/repositories}
       LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_ENVIRONMENT: ${LANGFUSE_ENVIRONMENT:-production}
+    volumes:
+      - repository-cache:/var/cache/tinysweeper/repositories
     healthcheck:
       # The runtime image is debian-slim without curl, so the probe is a raw
       # HTTP request over bash's /dev/tcp. It only has to distinguish "the
@@ -89,3 +95,6 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+volumes:
+  repository-cache:

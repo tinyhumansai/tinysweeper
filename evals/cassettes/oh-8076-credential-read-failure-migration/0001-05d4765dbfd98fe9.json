@@ -1,0 +1,22 @@
+{
+  "key": "05d4765dbfd98fe9",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4332,
+    "output_tokens": 256,
+    "reasoning_tokens": 263,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002806
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added is_persisted_document function correctly attempts JSON deserialization and returns a boolean without introducing any observable defects."
+  }
+}

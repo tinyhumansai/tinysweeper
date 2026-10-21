@@ -1,0 +1,26 @@
+{
+  "key": "d1b55382632f4a3b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 2231,
+    "output_tokens": 699,
+    "reasoning_tokens": 629,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002863
+  },
+  "value": {
+    "incorrect": [
+      {
+        "index": 1,
+        "reason": "Line 45 in the diff contains `#[cfg(feature = \"voice\")]` directly before the added `mod egress;` declaration on line 46, so the module is already guarded by the cfg attribute."
+      }
+    ]
+  }
+}

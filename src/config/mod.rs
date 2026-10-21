@@ -26,9 +26,9 @@ use crate::error::{Error, Result};
 
 pub use crate::config::merge::{Layer, Provenance};
 pub use crate::config::types::{
-    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId, Mcp,
-    MergeMethod, ModelRef, Models, PathInstruction, Paths, Review, Sentry, Severity, Stale,
-    Summary, SummarySection,
+    AutoMerge, Automation, Cache, Config, IssueClose, Issues, Labeler, Labels, Lane, LaneId,
+    LargePr, Mcp, MergeMethod, ModelRef, Models, PathInstruction, Paths, Review, Sentry, Severity,
+    Stale, Summary, SummarySection,
 };
 
 /// The built-in defaults, compiled in so a repository with no config at all
@@ -295,6 +295,7 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
         "" => Some(&[
             "version",
             "preset",
+            "server",
             "review",
             "paths",
             "path_instructions",
@@ -335,7 +336,19 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "request_changes_at",
             "approve_when_clean",
             "passes",
+            "large_pr",
         ]),
+        "review.large_pr" => Some(&[
+            "enabled",
+            "files",
+            "changed_lines",
+            "groups",
+            "max_groups",
+            "max_calls",
+            "soft_deadline_percent",
+            "drain_seconds",
+        ]),
+        "server" => Some(&["review_concurrency", "triage_concurrency"]),
         "threads" => Some(&["resolve_fixed", "ask_model", "comment_on_resolve"]),
         "overview" => Some(&[
             "enabled",
@@ -367,6 +380,9 @@ fn known_keys(path: &str) -> Option<&'static [&'static str]> {
             "provider",
             "max_tokens",
             "reasoning_effort",
+            "reviewer_reasoning_effort",
+            "falsify_reasoning_effort",
+            "summary_reasoning_effort",
             "structured_output",
             "agentic_reviewers",
             "budget_prices",

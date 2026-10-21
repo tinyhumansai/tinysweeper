@@ -97,6 +97,7 @@ pub async fn plan(inputs: &PlanInputs<'_>, model: Arc<dyn Model>) -> Result<Plan
             messages: vec![Message::system(SYSTEM), Message::user(suffix(inputs, &ui))],
             schema: schema(),
             schema_name: "tinysweeper_preview_plan".into(),
+            reasoning_effort: None,
             max_tokens: inputs.max_tokens,
         })
         .await?;

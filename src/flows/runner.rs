@@ -25,6 +25,7 @@ use crate::flows::lookup;
 use crate::flows::panel::Call;
 use crate::flows::subagent::{self, Answered};
 use crate::ports::model::{Model, ModelResponse, Usage};
+use crate::ports::model_execution::ModelExecutionRefusal;
 use crate::ports::tree::{Lookup, TreeReader};
 
 /// What one reviewer said, or why it said nothing.
@@ -47,6 +48,12 @@ pub struct Answer {
     pub looked_up: String,
     /// Usage reported for the model call that produced this answer.
     usage: Usage,
+    /// A typed host execution refusal, retained across lane decoding.
+    pub(crate) execution_refusal: Option<ModelExecutionRefusal>,
+    /// Usage from paid work before a typed refusal, when known.
+    pub(crate) execution_usage: Option<Box<Usage>>,
+    /// Whether all paid work in the refused operation was accounted for.
+    pub(crate) execution_accounting_complete: Option<bool>,
 }
 
 impl Answer {
@@ -59,6 +66,9 @@ impl Answer {
             error: Some(error.into()),
             looked_up: String::new(),
             usage: Usage::default(),
+            execution_refusal: None,
+            execution_usage: None,
+            execution_accounting_complete: None,
         }
     }
 }
@@ -85,6 +95,19 @@ pub fn lane_llm(
     budget_usd: f64,
 ) -> Arc<ModelCapability> {
     Arc::new(ModelCapability::new(model, config.models.clone()).with_budget(budget_usd))
+}
+
+/// Build a Critique or Security lane capability with its reviewer effort.
+pub fn reviewer_lane_llm(
+    model: Arc<dyn Model>,
+    config: &crate::config::types::Config,
+    budget_usd: f64,
+) -> Arc<ModelCapability> {
+    Arc::new(
+        ModelCapability::new(model, config.models.clone())
+            .with_reviewer_role()
+            .with_budget(budget_usd),
+    )
 }
 
 /// Ask every call in one round at once, and read an answer per call, in order.
@@ -146,11 +169,24 @@ async fn one_round_review(
                 error: None,
                 looked_up,
                 usage: response.usage,
+                execution_refusal: None,
+                execution_usage: None,
+                execution_accounting_complete: None,
             },
             Err(err) => {
                 tracing::debug!(lane = lane.as_str(), reviewer = %call.id, %err, "reviewer call failed");
                 let mut answer = Answer::failed(&call.id, err.to_string());
                 answer.usage = err.usage().unwrap_or_default();
+                if let crate::error::Error::ModelExecutionRefused {
+                    refusal,
+                    usage,
+                    accounting_complete,
+                } = &err
+                {
+                    answer.execution_refusal = Some(*refusal);
+                    answer.execution_usage = usage.clone();
+                    answer.execution_accounting_complete = Some(*accounting_complete);
+                }
                 answer
             }
         })
@@ -190,7 +226,7 @@ async fn answer_questions(
     model: &str,
     questions: &[String],
     evidence: &str,
-) -> (Vec<Answered>, Usage) {
+) -> (Vec<Answered>, Usage, Option<Answer>) {
     let calls: Vec<Call> = questions
         .iter()
         .enumerate()
@@ -199,11 +235,18 @@ async fn answer_questions(
     let answers = one_round(llm, lane, &calls, &subagent::answer_schema()).await;
 
     let mut usage = Usage::default();
+    let mut execution_refusal = None;
     let answered = questions
         .iter()
         .zip(answers)
         .filter_map(|(question, answer)| {
             usage.add(answer.usage);
+            if answer.execution_refusal.is_some() {
+                let cancelled = answer.execution_refusal == Some(ModelExecutionRefusal::Cancelled);
+                if cancelled || execution_refusal.is_none() {
+                    execution_refusal = Some(answer.clone());
+                }
+            }
             let value = answer.value?;
             Some(Answered {
                 question: question.clone(),
@@ -219,7 +262,17 @@ async fn answer_questions(
             })
         })
         .collect();
-    (answered, usage)
+    (answered, usage, execution_refusal)
+}
+
+fn refusal_error(answer: &Answer) -> Option<crate::error::Error> {
+    answer
+        .execution_refusal
+        .map(|refusal| crate::error::Error::ModelExecutionRefused {
+            refusal,
+            usage: answer.execution_usage.clone(),
+            accounting_complete: answer.execution_accounting_complete.unwrap_or(true),
+        })
 }
 
 /// How a lane wants its reviewers asked, beyond the one call.
@@ -482,9 +535,23 @@ pub async fn ask_all_accounted(
         // looked up. A sub-agent handed only the diff was answering "from the
         // repository" in name alone.
         let evidence = &prompts[index].prompt;
-        let (answered, subagent_usage) =
+        let (answered, subagent_usage, execution_refusal) =
             answer_questions(&llm, lane, model, &questions, evidence).await;
         usage.add(subagent_usage);
+
+        if let Some(mut refused) = execution_refusal {
+            if refused.execution_refusal == Some(ModelExecutionRefusal::Cancelled) {
+                return Err(
+                    refusal_error(&refused).expect("typed refusal retains its original error")
+                );
+            }
+            // A provisional verdict that requested more evidence cannot stand
+            // when the host stopped one of those required sub-agent turns.
+            refused.id = answers[index].id.clone();
+            refused.looked_up = answers[index].looked_up.clone();
+            answers[index] = refused;
+            continue;
+        }
 
         // Nothing came back, so a second turn would be the same turn with the
         // same evidence — one more call that cannot say anything new.
@@ -504,8 +571,13 @@ pub async fn ask_all_accounted(
             usage.add(answer.usage);
         }
         if let Some(mut settled) = round_two.into_iter().next()
-            && settled.value.is_some()
+            && (settled.value.is_some() || settled.execution_refusal.is_some())
         {
+            if settled.execution_refusal == Some(ModelExecutionRefusal::Cancelled) {
+                return Err(
+                    refusal_error(&settled).expect("typed refusal retains its original error")
+                );
+            }
             // The evidence the reviewer read travels with its final answer.
             settled.looked_up = answers[index].looked_up.clone();
             answers[index] = settled;

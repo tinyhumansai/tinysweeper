@@ -1,0 +1,22 @@
+{
+  "key": "1dc90893225313d5",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4043,
+    "output_tokens": 257,
+    "reasoning_tokens": 252,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002664
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change only expands the public re‑exports from the `registry` module. No new logic is introduced and no regressions are apparent; it is safe to merge assuming the newly exported symbols exist and are public."
+  }
+}

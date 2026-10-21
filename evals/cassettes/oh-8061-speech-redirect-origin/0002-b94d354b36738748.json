@@ -1,0 +1,30 @@
+{
+  "key": "b94d354b36738748",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4544,
+    "output_tokens": 203,
+    "reasoning_tokens": 105,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00027795
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "fn disclose_speech_transfer",
+        "why": "Verify the function signature and return type for correct usage"
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `super::egress::disclose_speech_transfer` to verify that the added call uses correct argument types and that the function returns a compatible error type."
+  }
+}

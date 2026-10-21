@@ -42,3 +42,37 @@ fn model_observations_preserve_actual_model_and_cost_without_messages() {
     assert_eq!(payload["batch"][0]["body"]["costDetails"]["total"], 0.01);
     assert!(!payload.to_string().contains("private"));
 }
+
+#[test]
+fn physical_dispatch_observations_keep_safe_usage_and_terminal_status() {
+    use openhuman_embed::PhysicalDispatchStatus;
+    use openhuman_embed::observe::TurnObservation;
+
+    let event = TurnObservation::ModelDispatch {
+        run_id: "run-1".into(),
+        call_id: Some("dispatch-2".into()),
+        requested_model: Some("primary".into()),
+        answered_model: Some("actual".into()),
+        finish_reason: Some("stop".into()),
+        duration_ms: 17,
+        status: PhysicalDispatchStatus::Succeeded,
+        refused: false,
+        usage: Some(openhuman_embed::observe::ObservedUsage {
+            input_tokens: 11,
+            output_tokens: 3,
+            reasoning_tokens: 1,
+            cost_usd: Some(0.02),
+            ..Default::default()
+        }),
+    };
+
+    let payload = observation(&event);
+    assert_eq!(payload["batch"][0]["body"]["model"], "actual");
+    assert_eq!(
+        payload["batch"][0]["body"]["metadata"]["status"],
+        "Succeeded"
+    );
+    assert_eq!(payload["batch"][0]["body"]["usage"]["output"], 3);
+    assert_eq!(payload["batch"][0]["body"]["costDetails"]["total"], 0.02);
+    assert!(!payload.to_string().contains("private"));
+}

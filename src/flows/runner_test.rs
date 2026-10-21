@@ -129,6 +129,11 @@ async fn accounted_runs_report_only_their_own_usage() {
     let usage = Usage {
         input_tokens: 100,
         output_tokens: 10,
+        reasoning_tokens: 0,
+        calls_attempted: 0,
+        calls_succeeded: 0,
+        calls_refused: 0,
+        calls_errored: 0,
         cached_tokens: 80,
         embed_tokens: 0,
         cost_usd: 0.01,
@@ -187,6 +192,11 @@ async fn concurrent_accounted_runs_do_not_claim_each_others_usage() {
     let usage = Usage {
         input_tokens: 100,
         output_tokens: 10,
+        reasoning_tokens: 0,
+        calls_attempted: 0,
+        calls_succeeded: 0,
+        calls_refused: 0,
+        calls_errored: 0,
         cached_tokens: 80,
         embed_tokens: 0,
         cost_usd: 0.01,
@@ -469,6 +479,237 @@ async fn no_second_turn_when_every_sub_agent_failed() {
     // The asking turn stands as the reviewer's answer.
     let value = answers[0].value.as_ref().expect("the first turn survives");
     assert_eq!(value["summary"], json!("I need to check something."));
+}
+
+#[tokio::test]
+async fn a_typed_subagent_refusal_is_not_hidden_by_an_answered_question() {
+    let usage = Usage {
+        input_tokens: 3,
+        output_tokens: 1,
+        cost_usd: 0.01,
+        ..Usage::default()
+    };
+    let model = MockModel::new()
+        .then(asking(&["first question", "second question"]))
+        .then(answered(true))
+        .then(answered(true))
+        .with_usage(usage);
+    let observed = model.clone();
+    let (_, control) = crate::harness::mock::execution_test_support::execution_control(2);
+    let controlled = model
+        .with_execution_control(control)
+        .expect("the mock preserves execution control");
+    let llm = lane_llm(controlled, &config(), 100.0);
+    let outcome = ask_all_accounted(
+        llm.clone(),
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
+    )
+    .await
+    .expect("host refusal is a partial answer, not a runner failure");
+
+    assert_eq!(
+        observed.calls(),
+        2,
+        "one sub-agent is refused before dispatch"
+    );
+    assert_eq!(outcome.usage.input_tokens, 6);
+    assert_eq!(outcome.usage.output_tokens, 2);
+    assert!((outcome.usage.cost_usd - 0.02).abs() < f64::EPSILON);
+    assert!(outcome.elapsed > std::time::Duration::ZERO);
+    assert_eq!(llm.spend().usage.input_tokens, 6);
+    assert_eq!(llm.spend().usage.output_tokens, 2);
+    assert!((llm.spend().usage.cost_usd - 0.02).abs() < f64::EPSILON);
+
+    let answer = &outcome.answers[0];
+    assert!(
+        answer.value.is_none(),
+        "the provisional verdict cannot stand"
+    );
+    assert_eq!(answer.id, "a");
+    assert_eq!(
+        answer.execution_refusal,
+        Some(crate::ports::model_execution::ModelExecutionRefusal::CallLimit)
+    );
+}
+
+#[tokio::test]
+async fn a_typed_settling_refusal_does_not_leave_the_provisional_answer_usable() {
+    let usage = Usage {
+        input_tokens: 3,
+        output_tokens: 1,
+        cost_usd: 0.01,
+        ..Usage::default()
+    };
+    let model = MockModel::new()
+        .then(asking(&["Does the caller validate this?\n"]))
+        .then(answered(true))
+        .then(found("Provisional finding"))
+        .with_usage(usage);
+    let observed = model.clone();
+    let (_, control) = crate::harness::mock::execution_test_support::execution_control(2);
+    let controlled = model
+        .with_execution_control(control)
+        .expect("the mock preserves execution control");
+    let llm = lane_llm(controlled, &config(), 100.0);
+    let outcome = ask_all_accounted(
+        llm.clone(),
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
+    )
+    .await
+    .expect("host refusal is a partial answer, not a runner failure");
+
+    assert_eq!(
+        observed.calls(),
+        2,
+        "the settling turn is refused before dispatch"
+    );
+    assert_eq!(outcome.usage.input_tokens, 6);
+    assert_eq!(outcome.usage.output_tokens, 2);
+    assert!((outcome.usage.cost_usd - 0.02).abs() < f64::EPSILON);
+    assert!(outcome.elapsed > std::time::Duration::ZERO);
+    assert_eq!(llm.spend().usage.input_tokens, 6);
+    assert_eq!(llm.spend().usage.output_tokens, 2);
+    assert!((llm.spend().usage.cost_usd - 0.02).abs() < f64::EPSILON);
+
+    let answer = &outcome.answers[0];
+    assert!(
+        answer.value.is_none(),
+        "the provisional verdict cannot stand"
+    );
+    assert_eq!(answer.id, "a");
+    assert_eq!(
+        answer.execution_refusal,
+        Some(crate::ports::model_execution::ModelExecutionRefusal::CallLimit)
+    );
+}
+
+#[tokio::test]
+async fn soft_deadline_refusals_in_question_and_settling_turns_remain_typed() {
+    use crate::ports::model_execution::ModelExecutionRefusal;
+
+    let usage = Usage {
+        input_tokens: 3,
+        output_tokens: 1,
+        cost_usd: 0.01,
+        ..Usage::default()
+    };
+
+    for settling_turn in [false, true] {
+        let mut model = MockModel::new().then(asking(&["Does the caller validate this?"]));
+        if settling_turn {
+            model = model.then(answered(true));
+        }
+        let model = model
+            .then_execution_refusal(ModelExecutionRefusal::SoftDeadline)
+            .with_usage(usage);
+        let llm = lane_llm(Arc::new(model), &config(), 100.0);
+        let outcome = ask_all_accounted(
+            llm,
+            LaneId::Critique,
+            &[call("a")],
+            &schema(),
+            Asking {
+                subagent_model: Some("vendor/flash"),
+                ..Asking::default()
+            },
+        )
+        .await
+        .expect("a soft stop is a partial runner result");
+
+        let answer = &outcome.answers[0];
+        assert!(answer.value.is_none());
+        assert_eq!(
+            answer.execution_refusal,
+            Some(ModelExecutionRefusal::SoftDeadline)
+        );
+        assert_eq!(
+            outcome.usage.input_tokens,
+            if settling_turn { 6 } else { 3 }
+        );
+        assert_eq!(
+            outcome.usage.output_tokens,
+            if settling_turn { 2 } else { 1 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancellation_in_question_and_settling_turns_remains_terminal() {
+    use crate::ports::model_execution::ModelExecutionRefusal;
+
+    for settling_turn in [false, true] {
+        let mut model = MockModel::new().then(asking(&["Does the caller validate this?"]));
+        if settling_turn {
+            model = model.then(answered(true));
+        }
+        let llm = lane_llm(
+            Arc::new(model.then_execution_refusal(ModelExecutionRefusal::Cancelled)),
+            &config(),
+            100.0,
+        );
+        let result = ask_all_accounted(
+            llm,
+            LaneId::Critique,
+            &[call("a")],
+            &schema(),
+            Asking {
+                subagent_model: Some("vendor/flash"),
+                ..Asking::default()
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::error::Error::ModelExecutionRefused {
+                refusal: ModelExecutionRefusal::Cancelled,
+                ..
+            })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn cancellation_wins_when_other_subagents_hit_a_policy_limit() {
+    use crate::ports::model_execution::ModelExecutionRefusal;
+
+    let model = MockModel::new()
+        .then(asking(&["first question", "second question"]))
+        .then_execution_refusal(ModelExecutionRefusal::CallLimit)
+        .then_execution_refusal(ModelExecutionRefusal::Cancelled);
+    let llm = lane_llm(Arc::new(model), &config(), 100.0);
+
+    let result = ask_all_accounted(
+        llm,
+        LaneId::Critique,
+        &[call("a")],
+        &schema(),
+        Asking {
+            subagent_model: Some("vendor/flash"),
+            ..Asking::default()
+        },
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(crate::error::Error::ModelExecutionRefused {
+            refusal: ModelExecutionRefusal::Cancelled,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]

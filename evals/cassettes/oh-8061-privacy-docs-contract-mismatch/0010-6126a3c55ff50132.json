@@ -1,0 +1,32 @@
+{
+  "key": "6126a3c55ff50132",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4266,
+    "output_tokens": 823,
+    "reasoning_tokens": 740,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00041905
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/voice/egress.rs",
+        "start": 1,
+        "why": "Check whether the egress module contains code that requires the \"voice\" feature, which would cause compilation errors when the feature is disabled."
+      }
+    ],
+    "resolved": [],
+    "summary": "Unable to determine if the added `mod egress;` should be gated by the `voice` feature; need to inspect the egress module for unconditional dependencies."
+  }
+}

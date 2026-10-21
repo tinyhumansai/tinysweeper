@@ -4,6 +4,9 @@
 //! shape here is what lets the offline mock be a first-class implementation
 //! rather than a stub, and what keeps octocrab out of the default build.
 
+/// Stable name for the server review check, also used by adapter-only recovery.
+pub const REVIEW_CHECK_NAME: &str = "tinysweeper/review";
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -119,6 +122,24 @@ pub struct PullRequest {
     /// therefore refuses a close rather than allowing one.
     #[serde(default)]
     pub quiet_days: u32,
+}
+
+/// Minimal live pull-request data needed before accepting a queued status.
+///
+/// This intentionally excludes diff, approval, comment, and review context
+/// data; queue admission must not fetch expensive review inputs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullRequestMetadata {
+    /// Pull request number.
+    pub number: u64,
+    /// Login of the pull request author.
+    pub author: String,
+    /// Verified live head used to pin the queued check.
+    pub head_sha: String,
+    /// Whether the pull request is still open.
+    pub open: bool,
+    /// Whether the pull request is a draft.
+    pub draft: bool,
 }
 
 /// An unstated `open` is an open pull request.
@@ -390,6 +411,19 @@ pub struct CheckImage {
 /// rejected check reads as "the bot did not run".
 pub const MAX_CHECK_IMAGES: usize = 8;
 
+/// Explicit status for a check run that has not concluded yet.
+///
+/// `None` on [`CheckRun`] preserves the established `in_progress` wire
+/// behavior; queued review admission is the only flow that sets `Queued`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckRunStatus {
+    /// GitHub has accepted the work, but no review permit is available yet.
+    Queued,
+    /// A worker has started the check.
+    InProgress,
+}
+
 /// A check run to publish.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRun {
@@ -414,6 +448,12 @@ pub struct CheckRun {
     /// `None` owes the same commit a terminal conclusion afterwards. Leaving
     /// one pending is not a cosmetic bug: it stalls the merge gate forever.
     pub conclusion: Option<CheckConclusion>,
+    /// Pending check status override; absent retains the legacy in-progress default.
+    #[serde(default)]
+    pub status: Option<CheckRunStatus>,
+    /// Stable recovery key for a check whose publish response may be lost.
+    #[serde(default)]
+    pub external_id: Option<String>,
     /// One-line title shown in the checks list.
     pub title: String,
     /// The markdown summary.
@@ -672,6 +712,19 @@ pub struct PullRequestContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_check_runs_default_to_the_existing_pending_status() {
+        let mut raw = serde_json::to_value(CheckRun::default()).expect("serializes");
+        let fields = raw.as_object_mut().expect("check object");
+        fields.remove("status");
+        fields.remove("external_id");
+
+        let recovered: CheckRun = serde_json::from_value(raw).expect("legacy check loads");
+        assert_eq!(recovered.status, None);
+        assert_eq!(recovered.external_id, None);
+        assert!(recovered.is_in_progress());
+    }
 
     #[test]
     fn repo_ids_round_trip() {

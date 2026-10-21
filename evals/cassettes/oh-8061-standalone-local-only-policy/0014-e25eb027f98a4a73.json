@@ -1,0 +1,22 @@
+{
+  "key": "e25eb027f98a4a73",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4223,
+    "output_tokens": 229,
+    "reasoning_tokens": 229,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002684
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a privacy disclosure call and documentation updates without introducing any observable regressions or compilation issues; it appears safe to merge."
+  }
+}

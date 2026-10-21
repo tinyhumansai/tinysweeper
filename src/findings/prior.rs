@@ -418,6 +418,7 @@ pub async fn load(read: &dyn ForgeRead, repo: &RepoId, number: u64) -> Result<Pr
     for comment in read.comments(repo, number).await? {
         if is_own_login(&comment.author)
             && let Some(sha) = marker_value(&comment.body, STATE_KEY)
+                .and_then(|value| value.split_ascii_whitespace().next())
             && is_sha(sha)
         {
             prior.last_sha = Some(sha.to_string());
@@ -889,7 +890,7 @@ mod tests {
                 IssueComment {
                     id: Some(2),
                     author: "tinysweeper".into(),
-                    body: "reviewed\n<!-- tinysweeper:state v=1 sha=abc1234 -->".into(),
+                    body: "reviewed\n<!-- tinysweeper:state v=1 sha=abc1234 usage=cost:0.01,input:100 -->".into(),
                 },
             ],
         );

@@ -1,0 +1,22 @@
+{
+  "key": "3014f1577ac9e79b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4812,
+    "output_tokens": 873,
+    "reasoning_tokens": 973,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00045885
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change only adds re‑exports for the new pending module and updates tests to the async `pending_count` API; it does not introduce any evident regressions or compilation issues, so it appears safe to merge."
+  }
+}

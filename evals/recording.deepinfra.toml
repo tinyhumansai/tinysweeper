@@ -1,0 +1,28 @@
+# Credential-free bounded configuration candidate for the five historical
+# corpus recordings. Revalidate model availability and public endpoint pricing
+# immediately before use. Do not use this file to run production reviews.
+
+[models]
+gateway = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+scan = "deepseek/deepseek-v3.2"
+deep = "deepseek/deepseek-v3.2"
+flash = "deepseek/deepseek-v3.2"
+fallback = []
+routes = []
+max_tokens = 4096
+reasoning_effort = "off"
+reviewer_reasoning_effort = "off"
+falsify_reasoning_effort = "off"
+summary_reasoning_effort = "off"
+structured_output = "json_object"
+agentic_reviewers = false
+budget_usd_per_pr = 0.50
+budget_prices = { "deepseek/deepseek-v3.2" = { input = 0.26, cached = 0.26, output = 0.38 } }
+
+[models.provider]
+order = ["deepinfra"]
+allow_fallbacks = false
+last_resort_unpinned = false
+unpinned_vendors = []

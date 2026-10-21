@@ -46,6 +46,7 @@ use crate::harness::schema;
 use crate::lanes::tests::Inventory;
 use crate::lanes::{
     Anchoring, Lane, LaneInput, LaneOutcome, aggregate_reviewer_responses, reviewer_responses,
+    stopped_by_execution_policy,
 };
 use crate::ports::model::Model;
 
@@ -118,6 +119,7 @@ impl Lane for E2e {
             return Ok(LaneOutcome {
                 summary: "This repository has no end-to-end harness, and its policy requires one."
                     .into(),
+                completed: true,
                 findings: vec![missing_harness_finding(&inventory.source[0])],
                 ..LaneOutcome::default()
             });
@@ -206,9 +208,30 @@ impl Lane for E2e {
         )
         .await?;
 
+        let responses = match reviewer_responses(LaneId::E2e, &reviewers, &answers) {
+            Ok(responses) => responses,
+            Err(err @ crate::error::Error::ModelExecutionRefused { refusal, .. }) => {
+                if let Some(mut outcome) =
+                    stopped_by_execution_policy(LaneId::E2e, changed_paths, llm.spend(), refusal)
+                {
+                    // Deterministic job findings remain a real verdict even
+                    // when the model could not assess coverage. `unanswered`
+                    // keeps an empty result Neutral without suppressing a
+                    // blocking finding as `skipped` would.
+                    outcome.skipped = None;
+                    outcome.findings = deterministic;
+                    outcome.pending = pending;
+                    append_run_notes(&mut outcome, &runs, evidence);
+                    return Ok(outcome);
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
+
         let Some(mut outcome) = aggregate_reviewer_responses(
             LaneId::E2e,
-            reviewer_responses(LaneId::E2e, &reviewers, &answers)?,
+            responses,
             input.diffs,
             Anchoring::Strict,
             input.config.council.corroboration,
@@ -351,6 +374,8 @@ mod lane_tests {
     use crate::harness::mock::MockModel;
     use crate::lanes::e2e::evidence::{Candidate, Evidence};
     use crate::lanes::e2e::inventory::classify_workflow;
+    use crate::ports::model::{Model, ModelRequest, ModelResponse};
+    use crate::ports::model_execution::ModelExecutionRefusal;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -399,6 +424,19 @@ mod lane_tests {
         }
     }
 
+    struct RefusingModel(ModelExecutionRefusal);
+
+    #[async_trait]
+    impl Model for RefusingModel {
+        async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse> {
+            Err(crate::error::Error::ModelExecutionRefused {
+                refusal: self.0,
+                usage: None,
+                accounting_complete: true,
+            })
+        }
+    }
+
     async fn run_with(
         model: MockModel,
         config: &Config,
@@ -418,11 +456,13 @@ mod lane_tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: evidence,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("lane runs")
@@ -559,6 +599,56 @@ mod lane_tests {
         assert_eq!(outcome.findings.len(), 1);
         assert_eq!(outcome.findings[0].rule, "e2e-failed");
         assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Failure);
+    }
+
+    #[tokio::test]
+    async fn a_budget_stopped_e2e_review_keeps_deterministic_failure_findings() {
+        for refusal in [
+            ModelExecutionRefusal::CallLimit,
+            ModelExecutionRefusal::SoftDeadline,
+            ModelExecutionRefusal::DrainDeadline,
+        ] {
+            let lane = E2e::new(Arc::new(RefusingModel(refusal)));
+            let pr = pull_request();
+            let diff = route_diff();
+            let evidence = evidence(
+                "src/**",
+                vec![CheckStatus {
+                    name: "playwright".into(),
+                    conclusion: Some(CheckConclusion::Failure),
+                }],
+            );
+            let outcome = lane
+                .run(LaneInput {
+                    config: &config(),
+                    pull_request: &pr,
+                    diffs: &[diff],
+                    file_contents: &BTreeMap::new(),
+                    scan_findings: &[],
+                    commits: &[],
+                    repo_policy: None,
+                    extracted_rules: &[],
+                    reviewed_evidence: "",
+                    prior_findings: &[],
+                    retrieval_status: crate::retrieve::RetrievalStatus::Off,
+                    retrieved_context: "",
+                    redaction_note: "",
+                    e2e: Some(&evidence),
+                    tree: None,
+                    graph: None,
+                    pass_yield_observer: None,
+                })
+                .await
+                .expect("a budget refusal leaves deterministic job facts publishable");
+
+            assert!(outcome.skipped.is_none());
+            assert_eq!(outcome.findings.len(), 1);
+            assert_eq!(outcome.findings[0].rule, "e2e-failed");
+            assert_eq!(outcome.unanswered, vec![LaneId::E2e.check_name()]);
+            assert_eq!(outcome.coverage, None);
+            assert!(!outcome.completed);
+            assert_eq!(outcome.conclusion(Severity::High), CheckConclusion::Failure);
+        }
     }
 
     #[tokio::test]
@@ -701,12 +791,14 @@ mod lane_tests {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "1 credential value was removed from this diff before you saw \
                                   it and appears as `<redacted, N chars>`.",
                 e2e: Some(&evidence),
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("lane runs");

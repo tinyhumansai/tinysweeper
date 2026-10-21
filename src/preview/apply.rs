@@ -127,6 +127,8 @@ pub async fn publish(
         summary: body.unwrap_or_else(|| {
             "No user flow produced a visible change on this commit.".to_string()
         }),
+        status: None,
+        external_id: None,
         images: render::check_images(gallery),
     };
     let check_id = match existing_check_id {

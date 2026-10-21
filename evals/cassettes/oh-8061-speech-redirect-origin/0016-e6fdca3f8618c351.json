@@ -1,0 +1,26 @@
+{
+  "key": "e6fdca3f8618c351",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1778,
+    "output_tokens": 593,
+    "reasoning_tokens": 538,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00023715
+  },
+  "value": {
+    "incorrect": [
+      {
+        "index": 1,
+        "reason": "The diff shows `#[cfg(feature = \"voice\")]` on line 45 directly above `mod egress;` on line 46, providing the required cfg guard."
+      }
+    ]
+  }
+}

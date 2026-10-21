@@ -1,0 +1,31 @@
+{
+  "key": "6638b9eb6d881e78",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4763,
+    "output_tokens": 360,
+    "reasoning_tokens": 286,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032815
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core",
+        "pattern": "fn disclose_speech_transfer",
+        "why": "Determine the signature and required arguments of disclose_speech_transfer to verify that passing &self.endpoint (String) is correct."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `disclose_speech_transfer` to confirm the added `endpoint` argument matches its expected type and semantics."
+  }
+}

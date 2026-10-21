@@ -1,0 +1,35 @@
+{
+  "key": "c9ca4776e85f14be",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4244,
+    "output_tokens": 844,
+    "reasoning_tokens": 782,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004232
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The new line `let endpoint: String = endpoint.into();` references a variable `endpoint` that is not defined in the function's parameters. This causes a compilation failure, preventing the crate from building. The constructor must be updated to accept an `endpoint: impl Into<String>` argument (or remove the line if the endpoint is not intended to be provided).",
+        "confidence": 0.98,
+        "existing_code": "let endpoint: String = endpoint.into();",
+        "late": false,
+        "path": "crates/openhuman-core/src/voice/factory/tts_providers.rs",
+        "rule": "undefined-variable",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add missing endpoint parameter to constructor"
+      }
+    ],
+    "resolved": [],
+    "summary": "The change adds an endpoint field and egress disclosure, but it introduces a compile error because the constructor does not accept an endpoint argument yet the code references an undefined `endpoint` variable."
+  }
+}

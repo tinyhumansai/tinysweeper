@@ -1,0 +1,30 @@
+schema = 1
+id = "tm-0102-memory-pending-debug-state"
+title = "Historical miss: Derived Debug on MemoryPendingStore exposes bearer OAuth state keys while sign-ins are pending; report safe metadata only."
+fixture = "../fixtures/tm-0102-memory-pending-debug-state.json"
+lanes = ["critique"]
+labels = ["recall", "historical-miss", "external-review", "rust"]
+exhaustive = false
+
+# Frozen diff/commits are pinned to the exact external review head. The current
+# PR body was augmented with later review fixes and would disclose the answer;
+# the preserved history lacks the original body, so this fixture omits it.
+# Comments are empty because the exact original review-time snapshot is absent.
+[budget]
+max_cost_usd = 0.50
+
+[provenance]
+repo = "tinyhumansai/tinymcp"
+pr = 102
+evidence = "https://github.com/tinyhumansai/tinymcp/pull/102#discussion_r4282783621 ; fix: https://github.com/tinyhumansai/tinymcp/commit/afe01db5010888ab4beb69e7ddb25b6646081112 ; reviewed head 40080aa060db089df841e00274e38c2723615fdd ; same-head TinySweeper review: https://github.com/tinyhumansai/tinymcp/pull/102#pullrequestreview-5532968156 ; source: https://github.com/tinyhumansai/tinymcp/blob/40080aa060db089df841e00274e38c2723615fdd/crates/tinymcp/src/registry/oauth/pending.rs#L142"
+labelled_by = "enamakel"
+labelled_on = "2026-10-19"
+
+[[expected]]
+# Fix regression: crates/tinymcp/src/registry/oauth/pending_tests.rs::the_memory_stores_debug_output_never_shows_a_state
+id = "E1"
+path = "crates/tinymcp/src/registry/oauth/pending.rs"
+lines = [142, 142]
+severity_min = "medium"
+summary = "Derived Debug on MemoryPendingStore exposes bearer OAuth state keys while sign-ins are pending; report safe metadata only."
+must_mention = ["debug|format", "state|secret|bearer", "redact|redacted|count"]

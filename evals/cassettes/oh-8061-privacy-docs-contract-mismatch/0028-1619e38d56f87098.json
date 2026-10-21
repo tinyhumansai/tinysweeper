@@ -1,0 +1,22 @@
+{
+  "key": "1619e38d56f87098",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4418,
+    "output_tokens": 429,
+    "reasoning_tokens": 429,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032815
+  },
+  "value": {
+    "findings": [],
+    "summary": "No additional defects found beyond the previously reported missing #[cfg] guard on the newly added egress module."
+  }
+}

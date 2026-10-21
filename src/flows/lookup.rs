@@ -466,6 +466,13 @@ const SEED_STOPWORDS: &[&str] = &[
 pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
     use crate::evidence::diff::LineKind;
     let mut out: Vec<String> = Vec::new();
+    let removed_functions: BTreeSet<String> = diff
+        .hunks
+        .iter()
+        .flat_map(|hunk| &hunk.lines)
+        .filter(|line| line.kind == LineKind::Removed)
+        .filter_map(|line| added_function_name(line.text.trim_start()).map(str::to_owned))
+        .collect();
     for line in diff.hunks.iter().flat_map(|h| h.lines.iter()) {
         if line.kind != LineKind::Added {
             continue;
@@ -473,6 +480,14 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
         let text = line.text.trim_start();
         if text.starts_with("//") || text.starts_with('*') || text.starts_with("///") {
             continue;
+        }
+        if let Some(name) = added_function_name(text)
+            && removed_functions.contains(name)
+        {
+            let candidate = format!("@caller:{name}");
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
         }
         let bytes = text.as_bytes();
         let mut i = 0;
@@ -516,6 +531,337 @@ pub fn seed_symbols(diff: &crate::evidence::diff::FileDiff) -> Vec<String> {
     out
 }
 
+enum AddedModulePaths {
+    Resolved { name: String, paths: Vec<String> },
+    Unavailable { name: String, reason: &'static str },
+}
+
+/// Resolve added out-of-line module declarations only when the diff contains
+/// enough lexical context to name their paths. Partial hunks cannot prove the
+/// enclosing inline-module stack, and ambiguous paths must not become a
+/// `NotFound` result from probing Rust's default layout.
+fn added_module_paths(diff: &crate::evidence::diff::FileDiff) -> Vec<AddedModulePaths> {
+    use crate::evidence::diff::LineKind;
+    let source = std::path::Path::new(&diff.path);
+    let parent = source.parent().unwrap_or_else(|| std::path::Path::new(""));
+    let stem = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let base = if matches!(stem, "lib" | "main" | "mod") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    let incomplete_context = diff.hunks.iter().any(|hunk| hunk.new_start > 1);
+    let mut brace_depth = 0usize;
+    let mut modules: Vec<(usize, String)> = Vec::new();
+    let mut path_attribute: Option<String> = None;
+    let mut unsupported_attribute = false;
+    let mut lexical_ambiguous = false;
+    let mut block_comment_depth = 0usize;
+    let mut declarations = Vec::new();
+
+    for line in diff.hunks.iter().flat_map(|hunk| &hunk.lines) {
+        if line.kind == LineKind::Removed {
+            continue;
+        }
+        let text = line.text.as_str();
+        if block_comment_depth == 0 && text.trim().starts_with("#[") {
+            if let Some(path) = rust_path_attribute(text) {
+                path_attribute = Some(path);
+            } else {
+                // cfg_attr, raw-string path values, and unfamiliar attributes
+                // can change whether or where this declaration exists. Never
+                // turn those cases into evidence from Rust's default layout.
+                unsupported_attribute = true;
+                lexical_ambiguous = true;
+            }
+            continue;
+        } else if !text.trim().is_empty() {
+            let mut cursor = 0usize;
+            let mut pending_inline: Option<String> = None;
+            while cursor < text.len() {
+                let rest = &text[cursor..];
+                if block_comment_depth > 0 {
+                    if rest.starts_with("/*") {
+                        block_comment_depth += 1;
+                        cursor += 2;
+                    } else if rest.starts_with("*/") {
+                        block_comment_depth -= 1;
+                        cursor += 2;
+                    } else {
+                        cursor += rest.chars().next().expect("cursor in bounds").len_utf8();
+                    }
+                    continue;
+                }
+                if rest.starts_with("/*") {
+                    block_comment_depth = 1;
+                    cursor += 2;
+                    continue;
+                }
+                if rest.starts_with("//") {
+                    break;
+                }
+                if rest.starts_with('#') {
+                    // Attributes embedded after other tokens need a full Rust
+                    // parser to associate them with the right item.
+                    lexical_ambiguous = true;
+                    break;
+                }
+                if let Some(end) = raw_string_end(text, cursor) {
+                    cursor = end;
+                    continue;
+                }
+                if starts_raw_string(text, cursor) {
+                    lexical_ambiguous = true;
+                    break;
+                }
+                if rest.starts_with('"') {
+                    cursor += 1;
+                    let mut closed = false;
+                    while cursor < text.len() {
+                        let byte = text.as_bytes()[cursor];
+                        cursor += 1;
+                        if byte == b'\\' {
+                            cursor = (cursor + 1).min(text.len());
+                        } else if byte == b'"' {
+                            closed = true;
+                            break;
+                        }
+                    }
+                    if !closed {
+                        lexical_ambiguous = true;
+                        break;
+                    }
+                    continue;
+                }
+                if rest.starts_with('\'')
+                    && let Some(end) = character_literal_end(text, cursor)
+                {
+                    cursor = end;
+                    continue;
+                }
+                if rest.starts_with("mod")
+                    && rest[3..].chars().next().is_some_and(char::is_whitespace)
+                    && (cursor == 0
+                        || !text.as_bytes()[cursor - 1].is_ascii_alphanumeric()
+                            && text.as_bytes()[cursor - 1] != b'_')
+                {
+                    let name_start = cursor + 3;
+                    let after_keyword = text[name_start..].trim_start();
+                    let whitespace = text[name_start..].len() - after_keyword.len();
+                    let name_start = name_start + whitespace;
+                    let name_end = text[name_start..]
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .map(|offset| name_start + offset)
+                        .unwrap_or(text.len());
+                    let name = &text[name_start..name_end];
+                    let suffix = text[name_end..].trim_start();
+                    if !name.is_empty() && suffix.starts_with(';') {
+                        if line.kind != LineKind::Added {
+                            path_attribute = None;
+                        } else if incomplete_context {
+                            declarations.push(AddedModulePaths::Unavailable {
+                                name: name.to_owned(),
+                                reason: "the diff does not show the enclosing module context",
+                            });
+                        } else if unsupported_attribute {
+                            declarations.push(AddedModulePaths::Unavailable {
+                                name: name.to_owned(),
+                                reason: "an unsupported attribute may change module resolution",
+                            });
+                        } else if lexical_ambiguous {
+                            declarations.push(AddedModulePaths::Unavailable {
+                                name: name.to_owned(),
+                                reason: "the diff contains lexical syntax the resolver cannot safely interpret",
+                            });
+                        } else if let Some(path) = path_attribute.take() {
+                            if !modules.is_empty() {
+                                declarations.push(AddedModulePaths::Unavailable {
+                                    name: name.to_owned(),
+                                    reason: "a path attribute inside an inline module has ambiguous base semantics",
+                                });
+                            } else {
+                                let explicit = std::path::Path::new(&path);
+                                if explicit.is_absolute()
+                                    || explicit
+                                        .components()
+                                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                                {
+                                    declarations.push(AddedModulePaths::Unavailable {
+                                        name: name.to_owned(),
+                                        reason: "the path attribute is not a safe repository-relative path",
+                                    });
+                                } else {
+                                    declarations.push(AddedModulePaths::Resolved {
+                                        name: name.to_owned(),
+                                        paths: vec![
+                                            parent.join(explicit).to_string_lossy().into_owned(),
+                                        ],
+                                    });
+                                }
+                            }
+                        } else {
+                            let mut module_parent = base.clone();
+                            for (_, module) in &modules {
+                                module_parent.push(module);
+                            }
+                            declarations.push(AddedModulePaths::Resolved {
+                                name: name.to_owned(),
+                                paths: vec![
+                                    module_parent
+                                        .join(format!("{name}.rs"))
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                    module_parent
+                                        .join(name)
+                                        .join("mod.rs")
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                ],
+                            });
+                        }
+                        cursor = name_end;
+                        unsupported_attribute = false;
+                        continue;
+                    }
+                    if !name.is_empty() && suffix.starts_with('{') {
+                        if path_attribute.is_some() || unsupported_attribute {
+                            // A path attribute on an inline module changes the
+                            // base used by its descendants. This small resolver
+                            // cannot safely carry that base through the tree.
+                            lexical_ambiguous = true;
+                            path_attribute = None;
+                            unsupported_attribute = false;
+                        }
+                        pending_inline = Some(name.to_owned());
+                        cursor = name_end;
+                        continue;
+                    }
+                    // The declaration may continue on a later line or use
+                    // syntax this resolver does not understand. Do not guess
+                    // a default path from an incomplete module item.
+                    lexical_ambiguous = true;
+                    cursor = name_end.max(cursor + 3);
+                    continue;
+                }
+                let ch = rest.chars().next().expect("cursor is in bounds");
+                match ch {
+                    '{' => {
+                        brace_depth += 1;
+                        if let Some(name) = pending_inline.take() {
+                            modules.push((brace_depth, name));
+                        }
+                    }
+                    '}' => {
+                        brace_depth = brace_depth.saturating_sub(1);
+                        while modules
+                            .last()
+                            .is_some_and(|(depth, _)| *depth > brace_depth)
+                        {
+                            modules.pop();
+                        }
+                    }
+                    _ => {}
+                }
+                cursor += ch.len_utf8();
+            }
+            if !text.trim().ends_with('{') {
+                path_attribute = None;
+                unsupported_attribute = false;
+            }
+        }
+    }
+    declarations
+}
+
+fn rust_path_attribute(line: &str) -> Option<String> {
+    let text = line.trim();
+    let value = text
+        .strip_prefix("#[path")?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim();
+    let value = value.strip_prefix('"')?;
+    let end = value.find('"')?;
+    let path = &value[..end];
+    (value[end + 1..].trim() == "]" && !path.contains('\\')).then(|| path.to_owned())
+}
+
+/// Return the byte immediately after a valid Rust raw string literal.
+fn raw_string_end(text: &str, start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut quote = start;
+    if bytes.get(quote) == Some(&b'b') {
+        quote += 1;
+    }
+    if bytes.get(quote) != Some(&b'r') {
+        return None;
+    }
+    quote += 1;
+    while bytes.get(quote) == Some(&b'#') {
+        quote += 1;
+    }
+    if bytes.get(quote) != Some(&b'"') {
+        return None;
+    }
+    let hashes = quote - start - usize::from(bytes[start] == b'b') - 1;
+    let closing = format!("\"{}", "#".repeat(hashes));
+    let end = text[quote + 1..].find(&closing)? + quote + 1 + closing.len();
+    Some(end)
+}
+
+fn starts_raw_string(text: &str, start: usize) -> bool {
+    let rest = &text[start..];
+    let rest = rest.strip_prefix('b').unwrap_or(rest);
+    rest.starts_with('r')
+        && rest[1..].bytes().take_while(|byte| *byte == b'#').count() + 1 < rest.len()
+        && rest.as_bytes()[1 + rest[1..].bytes().take_while(|byte| *byte == b'#').count()] == b'"'
+}
+
+/// Return the byte immediately after a simple escaped or unescaped char literal.
+fn character_literal_end(text: &str, start: usize) -> Option<usize> {
+    let mut cursor = start + 1;
+    let first = text[cursor..].chars().next()?;
+    cursor += first.len_utf8();
+    if first == '\\' {
+        let escaped = text[cursor..].chars().next()?;
+        cursor += escaped.len_utf8();
+        if escaped == 'u' && text[cursor..].starts_with('{') {
+            cursor += 1;
+            cursor += text[cursor..].find('}')? + 1;
+        }
+    }
+    (text.as_bytes().get(cursor) == Some(&b'\'')).then_some(cursor + 1)
+}
+
+/// Name of a function whose declaration was added or changed in this diff.
+fn added_function_name(text: &str) -> Option<&str> {
+    let mut rest = text.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("pub(") {
+            let end = after.find(')')?;
+            rest = after[end + 1..].trim_start();
+        } else if let Some(after) = ["pub ", "async ", "unsafe ", "const ", "default "]
+            .iter()
+            .find_map(|prefix| rest.strip_prefix(prefix))
+        {
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    let tail = rest.strip_prefix("fn ")?;
+    let end = tail.find('(')?;
+    let name = tail[..end].trim();
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+    .then_some(name)
+}
+
 impl Ledger {
     /// Look up, before the reviewer's first turn, the definitions of what the
     /// changed lines of every file in `diffs` call into.
@@ -555,6 +901,60 @@ impl Ledger {
                     .collect()
             })
             .collect();
+
+        // A module declaration names a path rather than a symbol. Read the
+        // declared module at the reviewed head so a cold index cannot hide a
+        // file added by the pull request.
+        for diff in diffs {
+            for declaration in added_module_paths(diff) {
+                if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+                    break;
+                }
+                match declaration {
+                    AddedModulePaths::Unavailable { name, reason } => {
+                        let body = format!(
+                            "\n### Declared module `{name}` at the reviewed head\n\nUnavailable: {reason}; no candidate path was probed, so this is not evidence that the module is missing.\n"
+                        );
+                        if self.chars + body.len() > policy.max_chars {
+                            break;
+                        }
+                        self.chars += body.len();
+                        answered += 1;
+                        rendered.push_str(&body);
+                    }
+                    AddedModulePaths::Resolved { name, paths } => {
+                        for path in paths {
+                            if answered >= SEED_SYMBOLS || self.chars >= policy.max_chars / 2 {
+                                break;
+                            }
+                            let lookup = Lookup::Read {
+                                path: path.clone(),
+                                start: None,
+                                end: None,
+                            };
+                            if !self.seen.insert(lookup.key()) {
+                                continue;
+                            }
+                            let result = tree.lookup(&lookup).await.unwrap_or_else(|err| {
+                                Found::Unavailable {
+                                    reason: err.to_string(),
+                                }
+                            });
+                            let body = format!(
+                                "\n### Declared module `{name}` at `{path}` in the reviewed head\n\n{}\n",
+                                render_found(&result)
+                            );
+                            if self.chars + body.len() > policy.max_chars {
+                                break;
+                            }
+                            self.chars += body.len();
+                            answered += 1;
+                            rendered.push_str(&body);
+                        }
+                    }
+                }
+            }
+        }
 
         'rounds: loop {
             let mut made_progress = false;
@@ -610,8 +1010,12 @@ The definitions of what the changed lines call into,                  read from 
         rendered: &mut String,
         answered: &mut usize,
     ) {
+        let caller = symbol.strip_prefix("@caller:");
+        let symbol = caller.unwrap_or(symbol);
         let capitalised = symbol.chars().next().is_some_and(char::is_uppercase);
-        let patterns: Vec<String> = if capitalised {
+        let patterns: Vec<String> = if caller.is_some() {
+            vec![format!("{symbol}(")]
+        } else if capitalised {
             vec![
                 format!("struct {symbol}"),
                 format!("enum {symbol}"),
@@ -629,9 +1033,43 @@ The definitions of what the changed lines call into,                  read from 
             if self.seen.contains(&lookup.key()) {
                 continue;
             }
-            let Ok(Found::Hits { hits, .. }) = tree.lookup(&lookup).await else {
+            let found = tree
+                .lookup(&lookup)
+                .await
+                .unwrap_or_else(|err| Found::Unavailable {
+                    reason: err.to_string(),
+                });
+            let Found::Hits {
+                hits,
+                truncated,
+                skipped,
+            } = &found
+            else {
+                self.seen.insert(lookup.key());
+                let body = format!(
+                    "\n### {} at the reviewed head\n\n{}\n",
+                    lookup.key(),
+                    render_found(&found)
+                );
+                if self.chars + body.len() <= policy.max_chars {
+                    self.chars += body.len();
+                    rendered.push_str(&body);
+                }
                 continue;
             };
+            if hits.is_empty() {
+                self.seen.insert(lookup.key());
+                let body = format!(
+                    "\n### {} at the reviewed head\n\n{}\n",
+                    lookup.key(),
+                    render_found(&found)
+                );
+                if self.chars + body.len() <= policy.max_chars {
+                    self.chars += body.len();
+                    rendered.push_str(&body);
+                }
+                continue;
+            }
             // A definition already in the diff is not looked up; one in
             // the same file but outside every hunk is — it is exactly as
             // invisible to the reviewer as one in another file, and the
@@ -647,16 +1085,28 @@ The definitions of what the changed lines call into,                  read from 
             let definitions: Vec<&crate::ports::tree::Hit> = hits
                 .iter()
                 .filter(|h| {
-                    looks_like_definition(&h.text) && !already_in_this_conversations_diff(h)
+                    (if caller.is_some() {
+                        !looks_like_definition(&h.text)
+                    } else {
+                        looks_like_definition(&h.text)
+                    }) && !already_in_this_conversations_diff(h)
                 })
                 .collect();
-            if definitions.is_empty() || definitions.len() > AUTO_FOLLOW {
+            if definitions.is_empty() || (caller.is_none() && definitions.len() > AUTO_FOLLOW) {
                 continue;
             }
+            let omitted = caller.is_some() && (definitions.len() > AUTO_FOLLOW || *truncated);
+            let definitions: Vec<&crate::ports::tree::Hit> =
+                definitions.into_iter().take(AUTO_FOLLOW).collect();
             self.seen.insert(lookup.key());
             let mut hits_text = String::new();
             for hit in &definitions {
                 hits_text.push_str(&format!("{}:{}: {}\n", hit.path, hit.line, hit.text));
+            }
+            if omitted || !skipped.is_empty() {
+                hits_text.push_str(&format!(
+                    "\nCaller search incomplete: showing at most {AUTO_FOLLOW} sites; additional matches or unsearched submodules may be omitted.\n"
+                ));
             }
             // The fence has to outrun any backtick run in a hit line — a
             // contributor-controlled source line containing ```` would
@@ -840,6 +1290,46 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_declared_module_keeps_missing_distinct_from_unavailable_at_head() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,2 @@\n fn main() {}\n+pub mod foo;\n",
+        );
+        let read = Lookup::Read {
+            path: "src/foo.rs".into(),
+            start: None,
+            end: None,
+        };
+        let unavailable = MockTree::from_recorded(
+            [(
+                read.key(),
+                Found::Unavailable {
+                    reason: "submodule is not checked out".into(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let mut ledger = Ledger::default();
+        let unavailable = ledger
+            .seed(&unavailable, std::slice::from_ref(&diff), &policy())
+            .await;
+        assert!(
+            unavailable
+                .rendered
+                .contains("Not available: submodule is not checked out")
+        );
+        assert!(!unavailable.rendered.contains("No such file at this commit"));
+
+        let missing =
+            MockTree::from_recorded([(read.key(), Found::NotFound)].into_iter().collect());
+        let mut ledger = Ledger::default();
+        let missing = ledger.seed(&missing, &[diff], &policy()).await;
+        assert!(missing.rendered.contains("No such file at this commit"));
+        assert!(!missing.rendered.contains("Not available:"));
+    }
+
     #[test]
     fn lookups_are_parsed_and_capped_per_round_and_bad_ones_dropped() {
         let value = json!({
@@ -999,6 +1489,382 @@ mod tests {
                 .rendered
                 .contains("src/episode.rs:1: fn read_pinboard"),
             "a definition inside the diff's own hunk is not a lookup: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn the_seed_reads_a_module_declared_by_the_change_from_the_head_tree() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_files([("src/foo.rs", "pub fn added_api() {}\n")]);
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/foo.rs") && seeded.rendered.contains("pub fn added_api"),
+            "a module declaration must read the module file at the reviewed head: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn the_seed_reads_directory_modules_declared_by_the_change() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_files([("src/foo/mod.rs", "pub fn from_directory() {}\n")]);
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/foo/mod.rs")
+                && seeded.rendered.contains("pub fn from_directory"),
+            "Rust module resolution also permits `foo/mod.rs`: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_module_declarations_resolve_from_the_inline_module_directory() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+mod outer { pub mod foo; }\n",
+        );
+        let tree = MockTree::from_files([("src/outer/foo.rs", "pub fn foo() {}\n")]);
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/outer/foo.rs")
+                && seeded.rendered.contains("pub fn foo()"),
+            "nested module evidence must follow Rust's lexical module directory: {}",
+            seeded.rendered
+        );
+        assert!(
+            !seeded
+                .rendered
+                .contains("Declared module `foo` at `src/foo.rs`")
+                && !seeded
+                    .rendered
+                    .contains("Declared module `foo` at `src/foo/mod.rs`"),
+            "a default-path miss must not contradict the resolved nested module: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn path_attribute_module_declarations_read_the_overridden_file() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,3 @@\n fn existing() {}\n+#[path = \"custom.rs\"]\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_files([("src/custom.rs", "pub fn foo() {}\n")]);
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/custom.rs") && seeded.rendered.contains("pub fn foo()"),
+            "a path attribute must resolve to its declared file: {}",
+            seeded.rendered
+        );
+        assert!(
+            !seeded.rendered.contains("No such file at this commit"),
+            "the ignored default path must not be presented as missing: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_raw_path_attributes_do_not_probe_default_module_paths() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1 @@\n+#[path = r\"custom.rs\"]\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(seeded.contains("no candidate path was probed"), "{seeded}");
+        assert!(!seeded.contains("src/foo.rs"), "{seeded}");
+        assert!(!seeded.contains("src/foo/mod.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn escaped_path_attributes_do_not_probe_the_escaped_spelling() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1 @@\n+#[path = \"cu\\\\x73tom.rs\"]\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(!seeded.contains("cu\\\\x73tom.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn a_path_attribute_on_an_inline_module_makes_child_paths_unavailable() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,4 @@\n+#[path = \"custom.rs\"]\n+mod outer {\n+    pub mod first;\n+    pub mod foo;\n+}\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(!seeded.contains("src/outer/foo.rs"), "{seeded}");
+        assert!(!seeded.contains("src/custom.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn braces_in_comments_and_character_literals_do_not_change_module_scope() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,4 @@\n+/* } */\n+let brace = '}';\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_files([("src/foo.rs", "pub fn ok() {}\n")]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(
+            seeded.contains("Declared module `foo` at `src/foo.rs`"),
+            "{seeded}"
+        );
+        assert!(!seeded.contains("Unavailable"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn an_unterminated_string_makes_later_module_paths_unavailable() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,2 @@\n+let text = \"unterminated {\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(!seeded.contains("src/foo.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn a_module_brace_on_the_next_line_does_not_seed_at_the_root() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,3 @@\n+mod outer\n+{\n+    pub mod foo;\n+}\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Declared module `foo`"), "{seeded}");
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(!seeded.contains("src/foo.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn multiline_cfg_attr_does_not_fall_back_to_default_module_paths() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,6 @@\n+#[cfg_attr(\n+    feature = \"custom\",\n+    path = \"custom.rs\"\n+)]\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_recorded(std::collections::BTreeMap::new());
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("Unavailable"), "{seeded}");
+        assert!(!seeded.contains("src/foo.rs"), "{seeded}");
+        assert!(!seeded.contains("src/foo/mod.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn path_like_text_inside_a_block_comment_is_not_a_module_attribute() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -1 +1,3 @@\n+/*\n+#[path = \"bogus.rs\"]\n+*/ pub mod foo;\n",
+        );
+        let tree = MockTree::from_files([("src/foo.rs", "pub fn actual_module() {}\n")]);
+        let mut ledger = Ledger::default();
+        let seeded = ledger
+            .seed(&tree, &[diff], &LookupPolicy::default())
+            .await
+            .rendered;
+
+        assert!(seeded.contains("src/foo.rs"), "{seeded}");
+        assert!(seeded.contains("actual_module"), "{seeded}");
+        assert!(!seeded.contains("src/bogus.rs"), "{seeded}");
+    }
+
+    #[tokio::test]
+    async fn partial_hunks_do_not_turn_unresolved_module_paths_into_missing_evidence() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/lib.rs",
+            "@@ -20,1 +20,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        );
+        let tree = MockTree::from_files(std::iter::empty::<(&str, &str)>());
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("Unavailable:"),
+            "{}",
+            seeded.rendered
+        );
+        assert!(
+            seeded
+                .rendered
+                .contains("not evidence that the module is missing"),
+            "{}",
+            seeded.rendered
+        );
+        assert!(
+            !seeded.rendered.contains("No such file at this commit"),
+            "an unresolved lexical path must not be presented as missing: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_function_signature_seeds_its_callers() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/api.rs",
+            "@@ -1,1 +1,1 @@\n-fn parse(value: &str) {}\n+pub fn parse(value: &str, strict: bool) {}\n",
+        );
+        let caller_search = Lookup::Search {
+            pattern: "parse(".into(),
+            glob: None,
+        };
+        let tree = MockTree::from_recorded(
+            [(
+                caller_search.key(),
+                Found::Hits {
+                    hits: vec![crate::ports::tree::Hit {
+                        path: "src/client.rs".into(),
+                        line: 2,
+                        text: "parse(value, true);".into(),
+                    }],
+                    truncated: false,
+                    skipped: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/client.rs")
+                && seeded.rendered.contains("parse(value, true)"),
+            "a changed signature must bring existing callers into evidence: {}",
+            seeded.rendered
+        );
+    }
+
+    #[tokio::test]
+    async fn caller_seeding_keeps_a_bounded_subset_when_many_callers_match() {
+        let diff = crate::evidence::diff::parse_file_patch(
+            "src/api.rs",
+            "@@ -1,1 +1,1 @@\n-fn parse(value: &str) {}\n+pub fn parse(value: &str, strict: bool) {}\n",
+        );
+        let caller_search = Lookup::Search {
+            pattern: "parse(".into(),
+            glob: None,
+        };
+        let hits = (1..=4)
+            .map(|line| crate::ports::tree::Hit {
+                path: format!("src/client_{line}.rs"),
+                line,
+                text: format!("parse(value, {line} > 1);"),
+            })
+            .collect();
+        let tree = MockTree::from_recorded(
+            [(
+                caller_search.key(),
+                Found::Hits {
+                    hits,
+                    truncated: false,
+                    skipped: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let mut ledger = Ledger::default();
+
+        let seeded = ledger
+            .seed(&tree, std::slice::from_ref(&diff), &LookupPolicy::default())
+            .await;
+
+        assert!(
+            seeded.rendered.contains("src/client_1.rs"),
+            "{}",
+            seeded.rendered
+        );
+        assert!(
+            seeded.rendered.contains("src/client_2.rs"),
+            "{}",
+            seeded.rendered
+        );
+        assert!(
+            seeded.rendered.contains("src/client_3.rs"),
+            "{}",
+            seeded.rendered
+        );
+        assert!(
+            !seeded.rendered.contains("src/client_4.rs"),
+            "bounded subset: {}",
+            seeded.rendered
+        );
+        assert!(
+            seeded.rendered.contains("incomplete") || seeded.rendered.contains("omitted"),
+            "a bounded caller sample must disclose omitted hits: {}",
             seeded.rendered
         );
     }

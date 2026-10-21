@@ -6,12 +6,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::types::LaneId;
 
+/// File and line counts for the pull-request diff supplied by the forge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SummaryDiffstat {
+    /// Changed files in the complete pull-request diff.
+    pub files: usize,
+    /// Added lines in the complete pull-request diff.
+    pub additions: u64,
+    /// Removed lines in the complete pull-request diff.
+    pub deletions: u64,
+}
+
+impl SummaryDiffstat {
+    /// Count a parsed reviewable diff when the forge's complete file list is
+    /// unavailable (primarily for offline callers and tests).
+    pub fn from_diffs(diffs: &[crate::evidence::diff::FileDiff]) -> Self {
+        Self {
+            files: diffs.len(),
+            additions: diffs.iter().map(|diff| diff.additions() as u64).sum(),
+            deletions: diffs.iter().map(|diff| diff.deletions() as u64).sum(),
+        }
+    }
+}
+
 /// Generated and deterministic material carried from review to apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReviewSummary {
     /// Short model-authored explanation shown above the fold.
     pub executive_summary: String,
+    /// Scrubbed PR title used for the deterministic purpose opening.
+    ///
+    /// Keeping this source separately lets incremental updates replace only
+    /// the prior generated title preamble before validating stored narrative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose_title: Option<String>,
     /// Model-authored behavioral explanation.
     pub changes: String,
     /// Cited feature descriptions.
@@ -22,6 +51,9 @@ pub struct ReviewSummary {
     pub positive_observations: BTreeMap<LaneId, Vec<String>>,
     /// Deterministically classified changed files.
     pub surface: ChangeSurface,
+    /// Per-file review coverage from completed lane evidence and the forge's
+    /// full changed-path list. Missing on legacy summaries without that proof.
+    pub file_coverage: Option<FileReviewCoverage>,
     /// Recent review passes, oldest first.
     pub history: Vec<ReviewPass>,
     /// Whether the stored cache conversation had to restart at this pass.
@@ -32,6 +64,18 @@ pub struct ReviewSummary {
     pub omitted_tests: usize,
     /// Update time as seconds since the Unix epoch.
     pub updated_at_epoch: u64,
+}
+
+/// The number of pull-request files covered by at least one completed lane.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileReviewCoverage {
+    /// Files covered by at least one completed review lane.
+    pub reviewed: usize,
+    /// Total changed paths supplied by the forge.
+    pub total: usize,
+    /// Changed paths no completed lane covered.
+    pub unreviewed: Vec<String>,
 }
 
 /// One generated behavior claim.

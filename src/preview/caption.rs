@@ -140,6 +140,7 @@ pub async fn caption(
                 ],
                 schema: schema(),
                 schema_name: "tinysweeper_preview_caption".into(),
+                reasoning_effort: None,
                 max_tokens: inputs.max_tokens,
             })
             .await;

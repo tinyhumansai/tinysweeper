@@ -1,0 +1,22 @@
+{
+  "key": "3aff54b41c1f5e3b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3957,
+    "output_tokens": 255,
+    "reasoning_tokens": 250,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002616
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds an egress disclosure call before invoking the cloud transcription API. No obvious defects are introduced by this addition based on the visible code."
+  }
+}

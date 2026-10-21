@@ -1,0 +1,30 @@
+schema = 1
+id = "oh-8061-standalone-local-only-policy"
+title = "Historical miss: Standalone voice startup failed to install persisted local-only policy before worker requests, allowing hosted STT upload."
+fixture = "../fixtures/oh-8061-standalone-local-only-policy.json"
+lanes = ["critique"]
+labels = ["recall", "historical-miss", "external-review", "rust"]
+exhaustive = false
+
+# Frozen diff/commits are pinned to the exact external review head. The current
+# PR body was augmented with later review fixes and would disclose the answer;
+# the preserved history lacks the original body, so this fixture omits it.
+# Comments are empty because the exact original review-time snapshot is absent.
+[budget]
+max_cost_usd = 0.50
+
+[provenance]
+repo = "tinyhumansai/openhuman"
+pr = 8061
+evidence = "https://github.com/tinyhumansai/openhuman/pull/8061#discussion_r4302645006 ; fix: https://github.com/tinyhumansai/openhuman/commit/cb8773cb9d9d5f29f8a1dfcfa224b30aca5f948d ; reviewed head a5f5838d165a6d5f0f044f58ff494ca4eb112398 ; same-head TinySweeper review: https://github.com/tinyhumansai/openhuman/pull/8061#pullrequestreview-5557748713 ; source: https://github.com/tinyhumansai/openhuman/blob/a5f5838d165a6d5f0f044f58ff494ca4eb112398/crates/openhuman-core/src/voice/egress.rs#L32"
+labelled_by = "enamakel"
+labelled_on = "2026-10-19"
+
+[[expected]]
+# Fix regression: crates/openhuman-core/src/voice/server/singleton_tests.rs::standalone_saved_privacy_blocks_uploads_on_worker_threads
+id = "E1"
+path = "crates/openhuman-core/src/voice/egress.rs"
+lines = [32, 32]
+severity_min = "high"
+summary = "Standalone voice startup failed to install persisted local-only policy before worker requests, allowing hosted STT upload."
+must_mention = ["standalone|server|worker", "local.only|local_only|privacy", "policy|mode|config", "upload|audio|speech"]

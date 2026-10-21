@@ -409,27 +409,31 @@ pub fn settle(watch: &Watch, checks: &[CheckStatus], fail_on: Severity) -> Optio
         }
     }
 
-    let mut summary = watch.summary.trim().to_string();
+    let mut summary = crate::markdown::prose(watch.summary.trim());
     let _ = write!(
         summary,
         "\n\nEnd-to-end jobs on {}:",
         short(&watch.head_sha)
     );
     for job in &passed {
-        let _ = write!(summary, "\n- `{}`: passed", crate::scan::scrub(job));
+        let _ = write!(
+            summary,
+            "\n- {}: passed",
+            crate::markdown::code_span(&crate::scan::scrub(job))
+        );
     }
     for job in &skipped {
         let _ = write!(
             summary,
-            "\n- `{}`: **skipped** — did not run on this pull request",
-            crate::scan::scrub(job)
+            "\n- {}: **skipped** — did not run on this pull request",
+            crate::markdown::code_span(&crate::scan::scrub(job))
         );
     }
     for (job, conclusion) in &failed {
         let _ = write!(
             summary,
-            "\n- `{}`: **{}**",
-            crate::scan::scrub(job),
+            "\n- {}: **{}**",
+            crate::markdown::code_span(&crate::scan::scrub(job)),
             conclusion_name(*conclusion)
         );
     }

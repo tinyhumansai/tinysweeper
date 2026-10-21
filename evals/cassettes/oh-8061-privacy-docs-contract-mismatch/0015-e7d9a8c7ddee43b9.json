@@ -1,0 +1,32 @@
+{
+  "key": "e7d9a8c7ddee43b9",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4344,
+    "output_tokens": 828,
+    "reasoning_tokens": 731,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0004242
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/voice/egress.rs",
+        "start": 1,
+        "why": "Determine if egress module depends on the \"voice\" feature, which would require a cfg guard like the other modules."
+      }
+    ],
+    "resolved": [],
+    "summary": "Provisional: need to verify whether the newly added `mod egress;` should be gated by the `voice` feature flag, as other sibling modules are."
+  }
+}

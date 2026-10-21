@@ -1,0 +1,30 @@
+{
+  "key": "78214b95183a158e",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4608,
+    "output_tokens": 208,
+    "reasoning_tokens": 136,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002824
+  },
+  "value": {
+    "lookups": [
+      {
+        "end": 120,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/voice/factory/stt_providers.rs",
+        "start": 70,
+        "why": "To see the full struct and constructor signature to verify endpoint handling and any missing imports or unused variables."
+      }
+    ],
+    "summary": "Need to examine surrounding code to verify added field and constructor handling."
+  }
+}

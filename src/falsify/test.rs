@@ -85,6 +85,11 @@ async fn falsifier_grounding_preserves_ranges_indices_and_unknown_locations() {
     );
     assert!(request.messages[1].content.contains("2. [src/main.rs]"));
     assert!(!request.messages[1].content.contains("[src/main.rs:0]"));
+    assert_eq!(
+        request.reasoning_effort.as_deref(),
+        Some("low"),
+        "the factual verification request carries its configured role effort"
+    );
 }
 
 #[tokio::test]

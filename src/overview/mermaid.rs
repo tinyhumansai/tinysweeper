@@ -22,7 +22,7 @@
 use std::fmt::Write as _;
 
 use crate::config::types::Severity;
-use crate::overview::types::{ChangeMap, Component, Role};
+use crate::overview::types::{ChangeMap, Component, Role, is_diagram_symbol};
 
 /// Characters allowed through into a diagram label.
 ///
@@ -66,12 +66,24 @@ pub fn flowchart(map: &ChangeMap) -> Option<String> {
         return None;
     }
 
+    let components: Vec<_> = map
+        .components
+        .iter()
+        .enumerate()
+        .filter(|(_, component)| is_diagram_symbol(component))
+        .collect();
+    let indices: std::collections::BTreeMap<usize, usize> = components
+        .iter()
+        .enumerate()
+        .map(|(new, (old, _))| (*old, new))
+        .collect();
+
     let mut out = String::with_capacity(512);
     // Left-to-right follows call/data flow. Inbound callers and tests naturally
     // sit before the changed behaviour; its callees sit after it.
     out.push_str("```mermaid\nflowchart LR\n");
 
-    for (index, component) in map.components.iter().enumerate() {
+    for (index, (_, component)) in components.iter().enumerate() {
         let _ = writeln!(
             out,
             "  n{index}[\"{}\"]:::{}",
@@ -81,13 +93,16 @@ pub fn flowchart(map: &ChangeMap) -> Option<String> {
     }
 
     for link in &map.links {
+        let (Some(from), Some(to)) = (indices.get(&link.from), indices.get(&link.to)) else {
+            continue;
+        };
         let relation = link.relation.as_str();
         let edge_label = if link.weight == 1 {
             relation.to_string()
         } else {
             format!("{relation} x{}", link.weight)
         };
-        let _ = writeln!(out, "  n{} -->|{}| n{}", link.from, edge_label, link.to);
+        let _ = writeln!(out, "  n{from} -->|{edge_label}| n{to}");
     }
 
     out.push_str(CLASS_DEFS);

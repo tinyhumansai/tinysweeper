@@ -50,9 +50,13 @@ use crate::harness::schema::{self, RawFinding};
 use crate::lanes::fanout::{FileReview, per_unit};
 use crate::lanes::grouping::{FileGroup, GroupBounds};
 use crate::lanes::mechanical;
+use crate::lanes::preparation::LanePreparationInput;
 use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend, Usage};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
+
+/// Confidence ceiling for critique model findings when retrieval is degraded.
+const DEGRADED_CONTEXT_CONFIDENCE_CAP: f64 = 0.7;
 
 /// The correctness lane.
 pub struct Critique {
@@ -66,6 +70,110 @@ impl Critique {
     }
 }
 
+/// The model-free part of preparing one critique lane.
+pub(crate) struct CritiquePreparation {
+    /// An early draft/content skip, when the lane has no candidate work.
+    pub(crate) skipped: Option<LaneOutcome>,
+    /// Groups in the exact order the existing critique runner reviews them.
+    pub(crate) groups: Vec<FileGroup>,
+    /// Paths covered without a current model response.
+    pub(crate) covered_without_model: Vec<String>,
+    /// A deterministic substitution proved by the changed lines, if any.
+    pub(crate) mechanical: Option<mechanical::Substitution>,
+    /// Whether every fresh path was verified mechanically.
+    pub(crate) paths_empty: bool,
+}
+
+/// Prepare critique groups without constructing prompts or calling a model.
+pub(crate) fn prepare(input: LanePreparationInput<'_>) -> CritiquePreparation {
+    if !input.has_reviewable_content() {
+        return CritiquePreparation {
+            skipped: Some(LaneOutcome::skipped(
+                "No added or modified lines to review.",
+            )),
+            groups: Vec::new(),
+            covered_without_model: Vec::new(),
+            mechanical: None,
+            paths_empty: true,
+        };
+    }
+
+    if let Some(skipped) = input.skip_as_draft() {
+        return CritiquePreparation {
+            skipped: Some(skipped),
+            groups: Vec::new(),
+            covered_without_model: Vec::new(),
+            mechanical: None,
+            paths_empty: true,
+        };
+    }
+
+    let fresh: Vec<&FileDiff> = replay::unreviewed(input.reviewed_evidence, input.diffs)
+        .into_iter()
+        .filter(|diff| !diff.changed_lines.is_empty())
+        .collect();
+    let mut covered_without_model: Vec<String> = input
+        .diffs
+        .iter()
+        .filter(|diff| {
+            !diff.changed_lines.is_empty() && !fresh.iter().any(|fresh| fresh.path == diff.path)
+        })
+        .map(|diff| diff.path.clone())
+        .collect();
+
+    // A mechanical rename is verified, not read. Keep one verified file as a
+    // sample: uniformity proves the same substitution, not that it is harmless.
+    let mechanical = mechanical::detect(&fresh);
+    let sample = mechanical
+        .as_ref()
+        .and_then(|substitution| substitution.verified.first().cloned());
+    let paths: Vec<String> = fresh
+        .iter()
+        .filter(|diff| {
+            mechanical.as_ref().is_none_or(|substitution| {
+                !substitution.verified.contains(&diff.path) || Some(&diff.path) == sample.as_ref()
+            })
+        })
+        .map(|diff| diff.path.clone())
+        .collect();
+
+    if let Some(substitution) = &mechanical {
+        covered_without_model.extend(
+            substitution
+                .verified
+                .iter()
+                .filter(|path| Some(*path) != sample.as_ref())
+                .cloned(),
+        );
+    }
+
+    let groups = if input.config.grouping.enabled {
+        input.group(
+            &paths,
+            &GroupBounds {
+                max_files: input.config.grouping.max_files,
+                max_hunk_chars: input.config.grouping.max_hunk_chars,
+            },
+        )
+    } else {
+        paths
+            .iter()
+            .map(|path| FileGroup {
+                label: path.clone(),
+                paths: vec![path.clone()],
+            })
+            .collect()
+    };
+
+    CritiquePreparation {
+        skipped: None,
+        groups,
+        covered_without_model,
+        mechanical,
+        paths_empty: paths.is_empty(),
+    }
+}
+
 #[async_trait]
 impl Lane for Critique {
     fn id(&self) -> LaneId {
@@ -73,120 +181,157 @@ impl Lane for Critique {
     }
 
     async fn run(&self, input: LaneInput<'_>) -> Result<LaneOutcome> {
-        // Cheapest possible check first. A pull request that only deletes
-        // files, or only touches ignored paths, has nothing for this lane, and
-        // asking a model to confirm that is money for a foregone conclusion.
-        if !input.has_reviewable_content() {
-            return Ok(LaneOutcome::skipped(
-                "No added or modified lines to review.",
-            ));
-        }
+        let prepared = prepare(input.preparation());
+        self.run_prepared(input, prepared).await
+    }
+}
 
-        if input.pull_request.draft && !input.config.review.draft_prs {
-            return Ok(LaneOutcome::skipped(
-                "Draft pull request; set `review.draft_prs = true` to review drafts.",
-            ));
-        }
-
-        // Files this lane has already reviewed, unchanged since, are skipped
-        // outright rather than replayed into a cacheable prefix. Both are
-        // sound, but a per-file lane can take the stronger one: skipping pays
-        // always, where a cache prefix only pays when the provider honours it.
-        // This is what `security` does, and for the same reason.
-        let fresh: Vec<&FileDiff> = replay::unreviewed(input.reviewed_evidence, input.diffs)
-            .into_iter()
-            .filter(|diff| !diff.changed_lines.is_empty())
-            .collect();
-
-        // A mechanical rename is verified, not read. Every file the
-        // substitution explains in full is proven line for line here and
-        // named as such in the summary; the model's budget goes to the files
-        // it does not explain — which, on the pull request that motivated
-        // this, was one file in fifty-nine. See `lanes::mechanical`.
-        let mechanical = mechanical::detect(&fresh);
-        // One verified file is still read: the check proves every file got
-        // the *same* substitution, not that the substitution is harmless.
-        // `check_admin()` → `allow_guest()` across fifty files is uniform and
-        // is not a rename. One conversation over one sample answers that;
-        // fifty over fifty answered it fifty times.
-        let sample = mechanical.as_ref().and_then(|sub| sub.verified.first());
-        let paths: Vec<String> = fresh
-            .iter()
-            .filter(|diff| {
-                mechanical.as_ref().is_none_or(|sub| {
-                    !sub.verified.contains(&diff.path) || Some(&diff.path) == sample
-                })
-            })
-            .map(|diff| diff.path.clone())
-            .collect();
-
+impl Critique {
+    /// Review one planner-selected group, retaining its exact normal lane path.
+    pub(crate) async fn review_selected_group(
+        llm: Arc<crate::flows::caps::ModelCapability>,
+        input: &LaneInput<'_>,
+        group: &FileGroup,
+    ) -> Result<FileReview> {
         let changed_paths = input.changed_paths();
-        // No model call: groups related changed files so a bug spanning them
-        // — a caller and its callee, a function and its test — is visible to
-        // one reviewer instead of hidden by the isolation clause each
-        // ungrouped conversation is given. Off, or a component too large to
-        // bet on, falls back to exactly the singleton fan-out this lane ran
-        // before grouping existed — see `lanes::grouping`.
-        let groups: Vec<FileGroup> = if input.config.grouping.enabled {
-            input.group(
-                &paths,
-                &GroupBounds {
-                    max_files: input.config.grouping.max_files,
-                    max_hunk_chars: input.config.grouping.max_hunk_chars,
-                },
-            )
-        } else {
-            paths
-                .iter()
-                .map(|path| FileGroup {
-                    label: path.clone(),
-                    paths: vec![path.clone()],
-                })
-                .collect()
-        };
+        let cross_file_evidence = replay::CrossFileEvidenceIndex::new(input.diffs);
+        let group_diffs: Vec<FileDiff> = group
+            .paths
+            .iter()
+            .filter_map(|path| input.diffs.iter().find(|diff| &diff.path == path).cloned())
+            .collect();
+        let review = review_group(
+            llm.clone(),
+            input,
+            &changed_paths,
+            &group.paths,
+            &group_diffs,
+            &cross_file_evidence,
+        )
+        .await?;
+        Ok(review)
+    }
+
+    /// Apply lane-wide postprocessing to selected group results.
+    pub(crate) fn finish_selected(
+        input: &LaneInput<'_>,
+        prepared: CritiquePreparation,
+        mut outcome: LaneOutcome,
+        llm: Arc<crate::flows::caps::ModelCapability>,
+    ) -> Result<LaneOutcome> {
+        if let Some(skipped) = prepared.skipped {
+            return Ok(skipped);
+        }
+        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.spend.merge(llm.spend());
+        outcome.include_reviewed_paths(prepared.covered_without_model);
+        if let Some(substitution) = &prepared.mechanical {
+            outcome.summary = format!(
+                "{} {}",
+                outcome.summary.trim(),
+                mechanical::note(substitution)
+            );
+            if prepared.paths_empty {
+                outcome.skipped = None;
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Run the exact model-free candidate preparation already used by planning.
+    pub(crate) async fn run_prepared(
+        &self,
+        input: LaneInput<'_>,
+        prepared: CritiquePreparation,
+    ) -> Result<LaneOutcome> {
+        self.run_prepared_with_execution(input, prepared, None)
+            .await
+    }
+
+    /// Run the prepared lane under its original review-wide stop window.
+    pub(crate) async fn run_prepared_with_execution(
+        &self,
+        input: LaneInput<'_>,
+        prepared: CritiquePreparation,
+        execution: Option<Arc<crate::app::review_execution::ReviewExecution>>,
+    ) -> Result<LaneOutcome> {
+        if let Some(skipped) = prepared.skipped {
+            return Ok(skipped);
+        }
+        let changed_paths = input.changed_paths();
+        let groups = prepared.groups;
+        let covered_without_model = prepared.covered_without_model;
+        let mechanical = prepared.mechanical;
+        let paths_empty = prepared.paths_empty;
 
         // One capability for the whole lane, so the pull-request budget is
         // enforced across every file and every reviewer at once. That is what
         // lets the groups run concurrently: this lane reviewed them one at a
         // time only because spend is known after a call returns, and there was
         // nowhere else to check it.
-        let llm = runner::lane_llm(
+        let llm = runner::reviewer_lane_llm(
             self.model.clone(),
             input.config,
             input.config.models.budget_usd_per_pr,
         );
+        // Links between changed files are indexed once, then each group's
+        // falsifier gets only its own diff and mechanically related excerpts.
+        let cross_file_evidence = replay::CrossFileEvidenceIndex::new(input.diffs);
 
-        let outcome = per_unit(
-            &groups,
-            |group| group.label.clone(),
-            |group| group.paths.clone(),
-            |group| {
-                let llm = llm.clone();
-                let input = &input;
-                let changed_paths = &changed_paths;
-                async move {
-                    let group_diffs: Vec<FileDiff> = group
-                        .paths
-                        .iter()
-                        .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
-                        .collect();
-                    review_group(llm, input, changed_paths, &group.paths, &group_diffs).await
-                }
-            },
-        )
-        .await;
+        let review = |group: crate::lanes::grouping::FileGroup| {
+            let llm = llm.clone();
+            let input = &input;
+            let changed_paths = &changed_paths;
+            let cross_file_evidence = &cross_file_evidence;
+            async move {
+                let group_diffs: Vec<FileDiff> = group
+                    .paths
+                    .iter()
+                    .filter_map(|path| input.diffs.iter().find(|d| &d.path == path).cloned())
+                    .collect();
+                review_group(
+                    llm,
+                    input,
+                    changed_paths,
+                    &group.paths,
+                    &group_diffs,
+                    cross_file_evidence,
+                )
+                .await
+            }
+        };
+        let outcome = if let Some(execution) = execution {
+            crate::lanes::fanout::per_unit_bounded(
+                &groups,
+                |group| group.label.clone(),
+                |group| group.paths.clone(),
+                review,
+                execution,
+            )
+            .await
+        } else {
+            per_unit(
+                &groups,
+                |group| group.label.clone(),
+                |group| group.paths.clone(),
+                review,
+            )
+            .await
+        };
 
         // The graph's own calls are tallied inside the capability, which is the
         // only object every one of them passes through. Folded in once here
         // rather than per file: `llm` is shared across the fan-out, so adding
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
+        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.include_reviewed_paths(covered_without_model);
         outcome.spend.merge(llm.spend());
         if let Some(sub) = &mechanical {
             outcome.summary = format!("{} {}", outcome.summary.trim(), mechanical::note(sub));
             // Every file was the rename: a real verdict, reached without a
             // model, and the outcome must say so rather than read as skipped.
-            if paths.is_empty() {
+            if paths_empty {
                 outcome.skipped = None;
             }
         }
@@ -216,9 +361,15 @@ async fn review_group(
     changed_paths: &[String],
     group_paths: &[String],
     group_diffs: &[FileDiff],
+    cross_file_evidence: &replay::CrossFileEvidenceIndex<'_>,
 ) -> Result<FileReview> {
     let config: &Config = input.config;
     let evidence = replay::render(group_diffs);
+    // Findings are confined to this group's paths, but contradictions can
+    // live in a mechanically related PR file (for example, a module added
+    // beside its declaration). The shared index keeps this bounded without
+    // replaying the complete PR diff for every group.
+    let falsifier_evidence = cross_file_evidence.render_for(group_diffs);
     let reviewers = council::reviewers(config, LaneId::Critique);
     let redaction_note = redaction_note(&evidence);
 
@@ -320,32 +471,49 @@ async fn review_group(
     } else {
         per_reviewer.into_iter().flatten().collect()
     };
+    let round_one_candidates = findings.len();
 
     // Step 5, once over the merged set rather than once per reviewer. The
     // filter can only reject, so more inputs in one pass is identical semantics
     // at a fraction of the calls.
     let filtered = Falsifier::new(llm.model().as_ref(), config)
-        .filter_with(LaneId::Critique, findings, &evidence, &looked_up)
+        .filter_with(LaneId::Critique, findings, &falsifier_evidence, &looked_up)
         .await;
     spend.merge(filtered.spend);
 
     let mut findings = filtered.findings;
+    let round_one_survivors = findings.len();
+    let mut execution_refusal = filtered.execution_refusal;
     let mut rejected = filtered.rejected;
+    let mut capped_for_degraded_context = 0usize;
+    let mut metrics = crate::lanes::coverage::Metrics::start(
+        round_one_usage,
+        round_one_elapsed,
+        round_one_candidates,
+        round_one_survivors,
+    );
+    if execution_refusal.is_none()
+        && let Some(observer) = input.pass_yield_observer
+    {
+        observer.record_pass_yield(
+            LaneId::Critique,
+            1,
+            round_one_candidates,
+            round_one_survivors,
+        );
+    }
 
-    // Adaptive coverage passes. Gated on the group's own size, not the whole
-    // pull request's — a lane fans out per group, so a two-line group must
-    // not build a second prompt just because the change elsewhere is large.
+    // Candidate yield and deterministic high-risk files trigger an extra look;
+    // unrelated large files in the pull request do not affect this group.
     let mut added_by_coverage = 0usize;
-    if config.review.passes > 1 && changed_lines(group_diffs) >= COVERAGE_PASS_MIN_LINES {
+    if execution_refusal.is_none()
+        && config.review.passes > 1
+        && (round_one_candidates > 0 || group_diffs.iter().any(crate::lanes::triage::high_risk))
+    {
         // Fed cumulatively: the second coverage pass (pass 3) is told about
         // everything round one *and* the first coverage pass found, so it
         // does not rediscover the first pass's own additions.
         let mut confirmed = findings.clone();
-        let mut metrics = crate::lanes::coverage::Metrics::start(
-            round_one_usage,
-            round_one_elapsed,
-            findings.len(),
-        );
 
         for pass_index in 1..config.review.passes {
             let reviewer = &reviewers[0];
@@ -377,12 +545,32 @@ async fn review_group(
             {
                 Ok(coverage) => coverage,
                 Err(err) => {
-                    tracing::warn!(%err, "an adaptive review pass failed");
+                    let refusal = match &err {
+                        crate::error::Error::ModelExecutionRefused { refusal, .. } => {
+                            Some(*refusal)
+                        }
+                        _ => None,
+                    };
+                    if refusal
+                        == Some(crate::ports::model_execution::ModelExecutionRefusal::Cancelled)
+                    {
+                        return Err(err);
+                    }
+                    if let Some(refusal) = refusal {
+                        execution_refusal = Some(refusal);
+                        tracing::info!(?refusal, "adaptive review pass stopped by host policy");
+                    } else {
+                        tracing::warn!(%err, "an adaptive review pass failed");
+                    }
                     // No per-call usage is observable when the round itself
                     // fails to return an outcome; count the attempt without
                     // attributing concurrent groups' shared lane spend to it.
-                    metrics.record(Usage::default(), Duration::ZERO, 0);
-                    metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                    metrics.record(Usage::default(), Duration::ZERO, 0, 0);
+                    metrics.stop(if refusal.is_some() {
+                        crate::lanes::coverage::StopReason::Refused
+                    } else {
+                        crate::lanes::coverage::StopReason::Failed
+                    });
                     break;
                 }
             };
@@ -391,11 +579,18 @@ async fn review_group(
             spend.merge(coverage.spend);
             looked_up.push_str(&coverage.looked_up);
 
+            if let Some(refusal) = coverage.execution_refusal {
+                execution_refusal = Some(refusal);
+                metrics.record(coverage_usage, coverage_elapsed, 0, 0);
+                metrics.stop(crate::lanes::coverage::StopReason::Refused);
+                break;
+            }
+
             // No answer this round: nothing new to place, and a round that
             // could not be reached is not evidence a further one would fare
             // better, so stop rather than pay for another.
             let Some(response) = coverage.response else {
-                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.record(coverage_usage, coverage_elapsed, 0, 0);
                 metrics.stop(crate::lanes::coverage::StopReason::Failed);
                 break;
             };
@@ -410,7 +605,7 @@ async fn review_group(
                 Ok(asked) => asked,
                 Err(err) => {
                     tracing::warn!(%err, "a coverage pass failed to place its findings");
-                    metrics.record(coverage_usage, coverage_elapsed, 0);
+                    metrics.record(coverage_usage, coverage_elapsed, 0, 0);
                     metrics.stop(crate::lanes::coverage::StopReason::PlacementFailure);
                     break;
                 }
@@ -447,7 +642,10 @@ async fn review_group(
             // Nothing new: a further pass over the same evidence would not
             // find more either, so stop rather than pay for one.
             if new_findings.is_empty() {
-                metrics.record(coverage_usage, coverage_elapsed, 0);
+                if let Some(observer) = input.pass_yield_observer {
+                    observer.record_pass_yield(LaneId::Critique, pass_index + 1, 0, 0);
+                }
+                metrics.record(coverage_usage, coverage_elapsed, 0, 0);
                 metrics.stop(if had_proposals {
                     crate::lanes::coverage::StopReason::Duplicate
                 } else {
@@ -458,17 +656,41 @@ async fn review_group(
 
             // Falsify only what this pass added — free when empty, and it
             // never re-judges what round one's own pass already kept.
+            let new_candidates = new_findings.len();
             let mut new_filtered = Falsifier::new(llm.model().as_ref(), config)
-                .filter_with(LaneId::Critique, new_findings, &evidence, &looked_up)
+                .filter_with(
+                    LaneId::Critique,
+                    new_findings,
+                    &falsifier_evidence,
+                    &looked_up,
+                )
                 .await;
             for finding in &mut new_filtered.findings {
                 finding.review_pass = pass_index + 1;
             }
             spend.merge(new_filtered.spend);
             rejected.extend(new_filtered.rejected);
+            if let Some(refusal) = new_filtered.execution_refusal {
+                execution_refusal = Some(refusal);
+                let survivors = new_filtered.findings.len();
+                findings.extend(new_filtered.findings);
+                metrics.record(coverage_usage, coverage_elapsed, new_candidates, survivors);
+                metrics.stop(crate::lanes::coverage::StopReason::Failed);
+                break;
+            }
+
+            let survivors = new_filtered.findings.len();
+            if let Some(observer) = input.pass_yield_observer {
+                observer.record_pass_yield(
+                    LaneId::Critique,
+                    pass_index + 1,
+                    new_candidates,
+                    survivors,
+                );
+            }
 
             if new_filtered.findings.is_empty() {
-                metrics.record(coverage_usage, coverage_elapsed, 0);
+                metrics.record(coverage_usage, coverage_elapsed, new_candidates, 0);
                 metrics.stop(crate::lanes::coverage::StopReason::NonSurviving);
                 break;
             }
@@ -476,13 +698,28 @@ async fn review_group(
             metrics.record(
                 coverage_usage,
                 coverage_elapsed,
+                new_candidates,
                 new_filtered.findings.len(),
             );
             added_by_coverage += new_filtered.findings.len();
             confirmed.extend(new_filtered.findings.clone());
             findings.extend(new_filtered.findings);
         }
-        metrics.emit(LaneId::Critique, group_paths);
+    }
+    // Emit one yield record for every reviewed group, including one-pass and
+    // adaptively ineligible groups, so zero yield remains observable.
+    metrics.emit(LaneId::Critique, group_paths);
+
+    // The application's typed context-degraded path keeps these findings as
+    // non-blocking structured notes. A Likely cap makes that caveat visible
+    // in their confidence badge without allowing unsupported repository-wide
+    // claims to drive a check verdict or inline comment. Scanners have their
+    // own evidence and are outside this model-finding gate.
+    if input.retrieval_status.is_degraded() {
+        capped_for_degraded_context = findings.len();
+        for finding in &mut findings {
+            finding.confidence = finding.confidence.min(DEGRADED_CONTEXT_CONFIDENCE_CAP);
+        }
     }
 
     Ok(FileReview {
@@ -493,30 +730,13 @@ async fn review_group(
             &rejected,
             &findings,
             added_by_coverage,
+            capped_for_degraded_context,
         ),
         findings,
         resolved,
         spend,
+        execution_refusal,
     })
-}
-
-/// Minimum changed lines a group needs before adaptive coverage passes
-/// (`review.passes > 1`) are worth their extra calls.
-///
-/// Not configurable: a repository that wants coverage passes at all is opting
-/// into the per-pass cost already, and a second dial here would only let it
-/// re-enable the noise this threshold exists to avoid on the two-line groups
-/// that make up most pull requests. 40 is comfortably above what a rename or a
-/// one-line fix touches, and comfortably below what a group large enough to
-/// need a second reviewer look would be.
-const COVERAGE_PASS_MIN_LINES: usize = 40;
-
-/// How many lines this group's diffs changed, summed across every file in it.
-fn changed_lines(group_diffs: &[FileDiff]) -> usize {
-    group_diffs
-        .iter()
-        .map(|diff| diff.changed_lines.len())
-        .sum()
 }
 
 /// What one reviewer said about one group.
@@ -559,6 +779,7 @@ fn prompt_inputs<'a>(
         focus_paths: group_paths,
         persona: reviewer.persona,
         retrieved_context: input.retrieved_context,
+        retrieval_status: Some(&input.retrieval_status),
         redaction_note,
         ..PromptInputs::new(LaneId::Critique, config)
     }
@@ -636,6 +857,7 @@ async fn place(
             return Err(crate::error::Error::Budget {
                 spent: spend.cost_usd(),
                 limit: config.models.budget_usd_per_pr,
+                usage: None,
             });
         }
 
@@ -738,30 +960,46 @@ fn summarise(
     rejected: &[Rejection],
     kept: &[Finding],
     added_by_coverage: usize,
+    capped_for_degraded_context: usize,
 ) -> String {
-    if kept.is_empty() && !rejected.is_empty() {
+    let summary = if capped_for_degraded_context > 0 {
+        let titles = kept
+            .iter()
+            .map(|finding| finding.title.trim())
+            .collect::<Vec<_>>()
+            .join("; ");
+        if titles.is_empty() {
+            "No findings were reported. Retrieval was degraded, so model confidence was capped at Likely."
+                .to_string()
+        } else {
+            format!(
+                "Critique findings were capped at Likely confidence because retrieval was degraded: {titles}."
+            )
+        }
+    } else if kept.is_empty() && !rejected.is_empty() {
         let reasons: Vec<String> = rejected
             .iter()
             .map(|item| format!("{} — {}", item.title.trim(), item.reason.trim()))
             .collect();
-        return format!(
+        format!(
             "Nothing to report. {} finding{} raised and dropped as disproved by the diff: {}.",
             rejected.len(),
             plural(rejected.len()),
             reasons.join("; ")
-        );
-    }
-
-    let summary = if rejected.is_empty() {
+        )
+    } else if rejected.is_empty() {
         summary.to_string()
     } else {
-        format!(
-            "Surviving findings: {}.",
-            kept.iter()
-                .map(|finding| finding.title.trim())
-                .collect::<Vec<_>>()
-                .join("; ")
-        )
+        let titles = kept
+            .iter()
+            .map(|finding| finding.title.trim())
+            .collect::<Vec<_>>()
+            .join("; ");
+        if titles.is_empty() {
+            "Nothing to report.".to_string()
+        } else {
+            format!("Surviving findings: {titles}.")
+        }
     };
     let rejected = rejected.len();
     let mut notes = Vec::new();
@@ -789,6 +1027,12 @@ fn summarise(
             plural(added_by_coverage)
         ));
     }
+    if capped_for_degraded_context > 0 {
+        notes.push(format!(
+            "{capped_for_degraded_context} model finding{} retained at no more than Likely confidence because retrieval was degraded",
+            plural(capped_for_degraded_context)
+        ));
+    }
 
     if notes.is_empty() {
         return summary;
@@ -808,8 +1052,44 @@ mod tests {
     use crate::forge::types::CheckConclusion;
     use crate::forge::types::PullRequest;
     use crate::harness::mock::MockModel;
+    use crate::ports::tree::{Found, Lookup};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    #[derive(Clone)]
+    struct MetricsLogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for MetricsLogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingTree {
+        inner: crate::ports::tree::MockTree,
+        lookups: std::sync::Mutex<Vec<Lookup>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::tree::TreeReader for CountingTree {
+        async fn lookup(&self, lookup: &Lookup) -> crate::error::Result<Found> {
+            self.lookups
+                .lock()
+                .expect("lookup calls")
+                .push(lookup.clone());
+            self.inner.lookup(lookup).await
+        }
+
+        fn describe(&self) -> String {
+            "counting mock tree".into()
+        }
+    }
 
     fn config() -> Config {
         let mut config: Config = crate::config::DEFAULTS
@@ -862,6 +1142,34 @@ fn helper() {
         diffs: &[FileDiff],
         file_contents: &BTreeMap<String, String>,
     ) -> LaneOutcome {
+        run_with_context(
+            model,
+            config,
+            diffs,
+            file_contents,
+            crate::retrieve::RetrievalStatus::Off,
+        )
+        .await
+    }
+
+    async fn run_with_context(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        file_contents: &BTreeMap<String, String>,
+        retrieval_status: crate::retrieve::RetrievalStatus,
+    ) -> LaneOutcome {
+        run_with_context_and_tree(model, config, diffs, file_contents, retrieval_status, None).await
+    }
+
+    async fn run_with_context_and_tree(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        file_contents: &BTreeMap<String, String>,
+        retrieval_status: crate::retrieve::RetrievalStatus,
+        tree: Option<&dyn crate::ports::tree::TreeReader>,
+    ) -> LaneOutcome {
         let pr = pull_request();
         Critique::new(Arc::new(model))
             .run(LaneInput {
@@ -875,14 +1183,47 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status,
+                retrieved_context: "",
+                redaction_note: "",
+                e2e: None,
+                tree,
+                graph: None,
+                pass_yield_observer: None,
+            })
+            .await
+            .expect("lane runs")
+    }
+
+    async fn run_with_prior(
+        model: MockModel,
+        config: &Config,
+        diffs: &[FileDiff],
+        prior: &[String],
+    ) {
+        let pr = pull_request();
+        Critique::new(Arc::new(model))
+            .run(LaneInput {
+                config,
+                pull_request: &pr,
+                diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: prior,
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
-            .expect("lane runs")
+            .expect("lane runs");
     }
 
     /// A finding anchored the way the schema now asks for: by quotation.
@@ -896,6 +1237,366 @@ fn helper() {
             "severity": "high",
             "confidence": 0.9
         })
+    }
+
+    #[tokio::test]
+    async fn a_degraded_index_keeps_unsupported_unchanged_code_at_likely_confidence() {
+        let config = config();
+        let diffs = vec![parse_file_patch(
+            "src/main.rs",
+            "@@ -1,2 +1,3 @@\n fn main() {\n+    let ready = true;\n }\n",
+        )];
+        let response = json!({
+            "summary": "The old branch is broken.",
+            "findings": [{
+                "path": "src/main.rs",
+                "existing_code": "fn main() {",
+                "rule": "bad-caller",
+                "title": "Handle the old caller",
+                "body": "The unchanged caller uses an incompatible contract.",
+                "severity": "critical",
+                "confidence": 0.99
+            }]
+        });
+        let model = MockModel::new()
+            .then(response)
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with_context(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].severity, Severity::Critical);
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert!(outcome.summary.contains("capped at Likely confidence"));
+        assert!(!outcome.summary.contains("old branch is broken"));
+    }
+
+    #[tokio::test]
+    async fn disputed_prior_finding_reaches_the_next_model_request_as_disputed() {
+        let config = config();
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+        let prior = [
+            "[disputed by maintainer; verify against current-head evidence] high — Close the socket on the error path"
+                .to_string(),
+        ];
+
+        run_with_prior(model, &config, &diffs(), &prior).await;
+
+        let request = handle.requests().pop().expect("critique model request");
+        let prompt = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains("[disputed by maintainer"));
+        assert!(prompt.contains("the earlier claim is not evidence"));
+        assert!(prompt.contains("independently supports the concern"));
+    }
+
+    #[tokio::test]
+    async fn degraded_retrieval_keeps_findings_grounded_on_changed_lines() {
+        let config = config();
+        let diffs = vec![parse_file_patch(
+            "src/main.rs",
+            "@@ -1,2 +1,3 @@\n fn main() {\n+    let ready = true;\n }\n",
+        )];
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The new value is unused.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "    let ready = true;",
+                    "rule": "unused-value",
+                    "title": "Use the ready value",
+                    "body": "The changed value is never read.",
+                    "severity": "high",
+                    "confidence": 0.9
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with_context(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert!(!outcome.findings[0].late);
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+    }
+
+    #[tokio::test]
+    async fn cold_retrieval_caps_changed_signature_claims_about_unavailable_callers() {
+        let config = config();
+        let diffs = vec![parse_file_patch(
+            "src/parser.rs",
+            "@@ -1,1 +1,1 @@\n-pub fn parse() -> i32 { 1 }\n+pub fn parse(input: i32) -> i32 { input }\n",
+        )];
+        let lookup = Lookup::Read {
+            path: "src/parser.rs".into(),
+            start: Some(1),
+            end: Some(1),
+        };
+        let caller_search = Lookup::Search {
+            pattern: "parse(".into(),
+            glob: None,
+        };
+        let tree = crate::ports::tree::MockTree::from_recorded(
+            [
+                (
+                    lookup.key(),
+                    Found::Unavailable {
+                        reason: "cold index".into(),
+                    },
+                ),
+                (
+                    caller_search.key(),
+                    Found::Unavailable {
+                        reason: "cold index cannot search callers".into(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "An unchanged caller still uses the old signature.",
+                "findings": [{
+                    "path": "src/parser.rs",
+                    "existing_code": "pub fn parse(input: i32) -> i32 { input }",
+                    "rule": "stale-caller",
+                    "title": "Update callers of parse",
+                    "body": "An unchanged caller still invokes parse with the old argument shape.",
+                    "severity": "critical",
+                    "confidence": 0.99
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with_context_and_tree(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+            Some(&tree),
+        )
+        .await;
+
+        assert_eq!(
+            outcome.findings.len(),
+            1,
+            "the finding stays visible: {outcome:?}"
+        );
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert_eq!(outcome.findings[0].severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn degraded_retrieval_caps_readable_unchanged_anchor_without_caller_evidence() {
+        let config = config();
+        let diffs = vec![parse_file_patch(
+            "src/main.rs",
+            "@@ -1,2 +1,3 @@\n fn main() {\n+    helper();\n }\n",
+        )];
+        let anchor_read = Lookup::Read {
+            path: "src/main.rs".into(),
+            start: Some(1),
+            end: Some(1),
+        };
+        let caller_search = Lookup::Search {
+            pattern: "fn helper(".into(),
+            glob: None,
+        };
+        let tree = crate::ports::tree::MockTree::from_recorded(
+            [
+                (
+                    anchor_read.key(),
+                    Found::Text {
+                        text: "1 fn main() {".into(),
+                        start: 1,
+                        end: 1,
+                        total: 3,
+                    },
+                ),
+                (
+                    caller_search.key(),
+                    Found::Unavailable {
+                        reason: "cold index cannot search callers".into(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The existing call needs a guard.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "fn main() {",
+                    "rule": "unsafe-caller",
+                    "title": "Guard the existing caller",
+                    "body": "The unchanged caller assumes an invalid contract.",
+                    "severity": "high",
+                    "confidence": 0.9
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+        let model_handle = model.clone();
+
+        let outcome = run_with_context_and_tree(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+            Some(&tree),
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert!(outcome.findings[0].late);
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert_eq!(outcome.findings[0].severity, Severity::High);
+        let request = model_handle
+            .requests()
+            .into_iter()
+            .find(|request| request.schema_name == "tinysweeper_critique")
+            .expect("the critique request");
+        let prompt = request
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            prompt.contains("cold index cannot search callers"),
+            "{prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_degraded_claim_about_an_existing_declared_module_is_still_capped() {
+        let config = config();
+        let diffs = vec![parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        )];
+        let tree =
+            crate::ports::tree::MockTree::from_files([("src/foo/mod.rs", "pub fn foo() {}\n")]);
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The declared module is missing.",
+                "findings": [{
+                    "path": "src/lib.rs",
+                    "existing_code": "pub mod foo;",
+                    "rule": "missing-module",
+                    "title": "Add the missing foo module",
+                    "body": "The module file is absent.",
+                    "severity": "critical",
+                    "confidence": 0.99
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with_context_and_tree(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+            Some(&tree),
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].severity, Severity::Critical);
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_lookups_do_not_trigger_post_review_tree_reads() {
+        let mut config = config();
+        config.lookup.enabled = false;
+        let diffs = vec![parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        )];
+        let tree = CountingTree {
+            inner: crate::ports::tree::MockTree::from_files([(
+                "src/foo/mod.rs",
+                "pub fn foo() {}\n",
+            )]),
+            lookups: std::sync::Mutex::new(Vec::new()),
+        };
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The declared module is missing.",
+                "findings": [{
+                    "path": "src/lib.rs",
+                    "existing_code": "pub mod foo;",
+                    "rule": "missing-module",
+                    "title": "Add the missing foo module",
+                    "body": "The module file is absent.",
+                    "severity": "critical",
+                    "confidence": 0.99
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+
+        let outcome = run_with_context_and_tree(
+            model,
+            &config,
+            &diffs,
+            &BTreeMap::new(),
+            crate::retrieve::RetrievalStatus::Cold,
+            Some(&tree),
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        let lookups = tree.lookups.lock().expect("lookup calls");
+        assert!(
+            lookups.is_empty(),
+            "disabled lookup policy must prevent post-review reads: {lookups:?}"
+        );
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
     }
 
     /// A finding in the pre-positioning shape, still accepted so a proposal
@@ -1041,8 +1742,207 @@ fn helper() {
         );
     }
 
-    /// How many changed lines a group needs to clear [`COVERAGE_PASS_MIN_LINES`].
-    const LARGE_LINES: usize = COVERAGE_PASS_MIN_LINES;
+    #[derive(Debug, Default)]
+    struct AddedModuleModel {
+        requests: std::sync::Mutex<Vec<crate::ports::model::ModelRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::model::Model for AddedModuleModel {
+        async fn complete(
+            &self,
+            request: crate::ports::model::ModelRequest,
+        ) -> crate::error::Result<crate::ports::model::ModelResponse> {
+            use crate::ports::model::{ModelResponse, Usage};
+
+            let prompt = request
+                .messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let value = if request.schema_name.contains("falsify") {
+                if prompt.contains("src/foo.rs") && prompt.contains("pub fn foo()") {
+                    json!({"incorrect": [{"index": 1, "reason": "the pull request adds src/foo.rs with the module implementation"}]})
+                } else {
+                    json!({"incorrect": []})
+                }
+            } else if request.schema_name.contains("critique")
+                && prompt.contains("The file is `src/lib.rs`")
+            {
+                json!({
+                    "summary": "The module file is missing.",
+                    "findings": [{
+                        "path": "src/lib.rs",
+                        "existing_code": "pub mod foo;",
+                        "rule": "missing-module",
+                        "title": "Add the missing foo module",
+                        "body": "The declared module has no source file.",
+                        "severity": "critical",
+                        "confidence": 0.99
+                    }]
+                })
+            } else {
+                json!({"summary": "Nothing to report.", "findings": []})
+            };
+            self.requests
+                .lock()
+                .expect("record requests")
+                .push(request.clone());
+            Ok(ModelResponse {
+                value,
+                model: request.model,
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn an_added_module_file_falsifies_a_missing_module_claim_across_groups() {
+        let mut config = config();
+        config.grouping.enabled = false;
+        let pr = pull_request();
+        let diffs = vec![
+            parse_file_patch(
+                "src/lib.rs",
+                "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+            ),
+            parse_file_patch("src/foo.rs", "@@ -0,0 +1,1 @@\n+pub fn foo() {}\n"),
+            parse_file_patch(
+                "docs/unrelated.md",
+                &format!("@@ -0,0 +1,1 @@\n+{}\n", "unrelated context ".repeat(4_000)),
+            ),
+        ];
+        let tree = crate::ports::tree::MockTree::from_files([("src/foo.rs", "pub fn foo() {}\n")]);
+        let model = Arc::new(AddedModuleModel::default());
+
+        let outcome = Critique::new(model.clone())
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
+                retrieved_context: "",
+                redaction_note: "",
+                e2e: None,
+                tree: Some(&tree),
+                graph: None,
+                pass_yield_observer: None,
+            })
+            .await
+            .expect("lane runs");
+
+        assert!(outcome.findings.is_empty(), "{outcome:?}");
+        let requests = model.requests.lock().expect("recorded requests");
+        let falsifier = requests
+            .iter()
+            .find(|request| request.schema_name.contains("falsify"))
+            .expect("the false finding reaches falsification");
+        let falsifier_prompt = falsifier
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            falsifier_prompt.contains("src/foo.rs") && falsifier_prompt.contains("pub fn foo()"),
+            "falsification must see the added file even though another group owns it: {falsifier_prompt}"
+        );
+        assert!(
+            !falsifier_prompt.contains("unrelated context"),
+            "cross-file falsification must not replay unrelated PR files: {falsifier_prompt}"
+        );
+        assert!(
+            falsifier_prompt.len() < 20_000,
+            "cross-file evidence must have a deterministic byte ceiling: {} bytes",
+            falsifier_prompt.len()
+        );
+        assert!(
+            requests.iter().any(|request| {
+                request.schema_name.contains("critique")
+                    && request
+                        .messages
+                        .iter()
+                        .any(|message| message.content.contains("pub fn foo()"))
+            }),
+            "the module declaration's seed must read the new file from the head tree"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_degraded_missing_module_claim_is_capped_without_a_successful_head_read() {
+        let mut config = config();
+        config.grouping.enabled = false;
+        let pr = pull_request();
+        let diffs = vec![parse_file_patch(
+            "src/lib.rs",
+            "@@ -1,1 +1,2 @@\n fn existing() {}\n+pub mod foo;\n",
+        )];
+        let module_rs = Lookup::Read {
+            path: "src/foo.rs".into(),
+            start: None,
+            end: None,
+        };
+        let module_mod_rs = Lookup::Read {
+            path: "src/foo/mod.rs".into(),
+            start: None,
+            end: None,
+        };
+        let tree = crate::ports::tree::MockTree::from_recorded(
+            [
+                (module_rs.key(), Found::NotFound),
+                (
+                    module_mod_rs.key(),
+                    Found::Unavailable {
+                        reason: "the index is cold".into(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let model = Arc::new(AddedModuleModel::default());
+
+        let outcome = Critique::new(model)
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Cold,
+                retrieved_context: "",
+                redaction_note: "",
+                e2e: None,
+                tree: Some(&tree),
+                graph: None,
+                pass_yield_observer: None,
+            })
+            .await
+            .expect("lane runs");
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert!(
+            outcome.findings[0].confidence <= DEGRADED_CONTEXT_CONFIDENCE_CAP,
+            "a changed `pub mod` anchor does not prove the external module exists: {outcome:?}"
+        );
+        assert!(outcome.summary.contains("capped at Likely confidence"));
+    }
+
+    /// Keep the fixture large enough to exercise multi-pass prompt handling.
+    const LARGE_LINES: usize = 40;
 
     /// A synthetic patch whose group is large enough for a coverage pass to
     /// run at all — `diffs()` is deliberately two lines, so every coverage
@@ -1149,11 +2049,236 @@ fn helper() {
     }
 
     #[tokio::test]
+    async fn a_low_risk_group_without_candidates_uses_one_reviewer_call() {
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &large_diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            1,
+            "an empty first-pass result on an ordinary group must not buy another look"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_high_risk_group_without_candidates_gets_an_adaptive_pass() {
+        let model = MockModel::new()
+            .then(json!({"summary": "Nothing to report.", "findings": []}))
+            .then(json!({"summary": "Nothing to report.", "findings": []}));
+        let handle = model.clone();
+        let auth_diff = vec![parse_file_patch("src/auth.rs", PATCH)];
+
+        run_with(model, &config_with_passes(2), &auth_diff).await;
+
+        assert_eq!(
+            handle.calls(),
+            2,
+            "a sensitive path keeps a second look even when the first found no candidate"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_small_group_with_a_candidate_gets_an_adaptive_pass() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "Unchecked index.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "let x = items[i];",
+                    "rule": "unchecked-index",
+                    "title": "Guard the index",
+                    "body": "The index may be out of bounds.",
+                    "severity": "high",
+                    "confidence": 0.9
+                }]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "No further findings.", "findings": []}));
+        let handle = model.clone();
+
+        run_with(model, &config_with_passes(2), &diffs()).await;
+
+        assert_eq!(
+            handle.calls(),
+            3,
+            "a small group's first-pass candidate should earn one further review"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_small_candidate_rejected_by_falsification_still_gets_a_second_review() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "Unchecked index.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "let x = items[i];",
+                    "rule": "unchecked-index",
+                    "title": "Guard the index",
+                    "body": "The index may be out of bounds.",
+                    "severity": "high",
+                    "confidence": 0.9
+                }]
+            }))
+            .then(json!({"incorrect": [{"index": 1, "reason": "The diff proves i is in bounds."}]}))
+            .then(json!({"summary": "No further findings.", "findings": []}));
+        let handle = model.clone();
+        let config = config_with_passes(2);
+        let pr = pull_request();
+        let diffs = diffs();
+        let timing = crate::review_timing::ReviewTiming::new("owner/repo", 7, "Normal");
+        let outcome = Critique::new(Arc::new(model))
+            .run(LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &BTreeMap::new(),
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
+                retrieved_context: "",
+                redaction_note: "",
+                e2e: None,
+                tree: None,
+                graph: None,
+                pass_yield_observer: Some(&timing),
+            })
+            .await
+            .expect("lane runs");
+
+        assert!(
+            outcome.findings.is_empty(),
+            "falsification rejected the candidate"
+        );
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.schema_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "tinysweeper_critique",
+                "tinysweeper_falsify",
+                "tinysweeper_critique"
+            ],
+            "the final request is a second reviewer call, even though no finding survived"
+        );
+        let yields = timing.snapshot().pass_yields;
+        assert_eq!(yields["critique:1"].groups, 1);
+        assert_eq!(yields["critique:1"].candidates, 1);
+        assert_eq!(yields["critique:1"].survivors, 0);
+        assert_eq!(yields["critique:2"].groups, 1);
+        assert_eq!(yields["critique:2"].candidates, 0);
+        assert_eq!(yields["critique:2"].survivors, 0);
+    }
+
+    #[tokio::test]
+    async fn critique_coverage_and_falsify_requests_use_their_custom_efforts() {
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "Unchecked index.",
+                "findings": [finding_named("Guard the first index", 3)]
+            }))
+            .then(json!({"incorrect": []}))
+            .then(json!({"summary": "No additional findings.", "findings": []}));
+        let handle = model.clone();
+        let mut config = config_with_passes(2);
+        config.models.reasoning_effort = "high".into();
+        config.models.reviewer_reasoning_effort = "low".into();
+        config.models.falsify_reasoning_effort = "medium".into();
+        config.models.summary_reasoning_effort = "off".into();
+
+        run_with(model, &config, &large_diffs()).await;
+
+        let requests = handle.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].schema_name, "tinysweeper_critique");
+        assert_eq!(requests[0].reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(requests[1].schema_name, "tinysweeper_falsify");
+        assert_eq!(requests[1].reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(requests[2].schema_name, "tinysweeper_critique");
+        assert_eq!(requests[2].reasoning_effort.as_deref(), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn blank_global_effort_disables_reviewer_and_falsifier_requests() {
+        let mut role_failures = Vec::new();
+        for global in ["", "   "] {
+            let model = MockModel::new()
+                .then(json!({
+                    "summary": "Unchecked index.",
+                    "findings": [finding_named("Guard the first index", 3)]
+                }))
+                .then(json!({"incorrect": []}))
+                .then(json!({"summary": "No additional findings.", "findings": []}));
+            let handle = model.clone();
+            let mut config = config_with_passes(2);
+            config.models.reasoning_effort = global.into();
+
+            run_with(model, &config, &large_diffs()).await;
+
+            let requests = handle.requests();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[0].schema_name, "tinysweeper_critique");
+            assert_eq!(requests[1].schema_name, "tinysweeper_falsify");
+            assert_eq!(requests[2].schema_name, "tinysweeper_critique");
+            for request in &requests {
+                if request.reasoning_effort.as_deref() != Some("off") {
+                    role_failures.push(format!(
+                        "global {global:?}, schema {}: got {:?}",
+                        request.schema_name, request.reasoning_effort
+                    ));
+                }
+            }
+        }
+        assert!(role_failures.is_empty(), "{role_failures:#?}");
+    }
+
+    #[tokio::test]
+    async fn one_pass_empty_groups_emit_zero_yield_metrics() {
+        use tracing::instrument::WithSubscriber;
+
+        let model = MockModel::new().then(json!({
+            "summary": "Nothing to report.",
+            "findings": []
+        }));
+        let handle = model.clone();
+        let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer_bytes = bytes.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || MetricsLogWriter(writer_bytes.clone()))
+            .finish();
+
+        run_with(model, &config_with_passes(1), &diffs())
+            .with_subscriber(subscriber)
+            .await;
+
+        assert_eq!(handle.calls(), 1);
+        let line = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert_eq!(line.matches("adaptive review passes").count(), 1, "{line}");
+        assert!(line.contains("passes_attempted=1"), "{line}");
+        assert!(line.contains("candidate_findings_per_pass=[0]"), "{line}");
+        assert!(line.contains("surviving_findings_per_pass=[0]"), "{line}");
+    }
+
+    #[tokio::test]
     async fn adaptive_requests_keep_path_rules_and_redaction_guidance() {
         let mut config = config_with_passes(2);
         config.path_instructions = vec![
             PathInstruction {
-                glob: "src/large.rs".into(),
+                glob: "src/auth.rs".into(),
                 instructions: "Check every index against the collection length.".into(),
                 rules: None,
                 lanes: vec![LaneId::Critique],
@@ -1171,7 +2296,7 @@ fn helper() {
             "+    let x0 = 0;",
             "+    let x0 = \"<redacted, 12 chars>\";",
         );
-        let diffs = vec![parse_file_patch("src/large.rs", &patch)];
+        let diffs = vec![parse_file_patch("src/auth.rs", &patch)];
         let model = MockModel::new()
             .then(json!({"summary": "Nothing to report.", "findings": []}))
             .then(json!({"summary": "Nothing further.", "findings": []}));
@@ -1260,15 +2385,19 @@ fn helper() {
         // If round one found nothing and the coverage pass then adds a
         // surviving finding, the summary must say so rather than keep
         // reading "Nothing to report." while `findings` says otherwise.
+        let mut coverage_finding = finding_named("Guard the second index", 30);
+        coverage_finding["path"] = json!("src/auth.rs");
         let model = MockModel::new()
             .then(json!({"summary": "Nothing to report.", "findings": []}))
             .then(json!({
                 "summary": "…",
-                "findings": [finding_named("Guard the second index", 30)]
+                "findings": [coverage_finding]
             }))
             .then(json!({"incorrect": []}));
 
-        let outcome = run_with(model, &config_with_passes(2), &large_diffs()).await;
+        let mut diff = large_diffs();
+        diff[0].path = "src/auth.rs".into();
+        let outcome = run_with(model, &config_with_passes(2), &diff).await;
 
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
         assert!(
@@ -1412,6 +2541,89 @@ fn helper() {
 
         assert_eq!(outcome.findings.len(), 1, "{:#?}", outcome.findings);
         assert_eq!(handle.calls(), 3, "failure must stop before pass three");
+    }
+
+    #[tokio::test]
+    async fn an_adaptive_lookup_refusal_keeps_its_paid_usage_and_elapsed_time() {
+        let (handle, model, execution) = crate::lanes::coverage::test_support::limited_model(
+            json!({"summary": "Nothing to report.", "findings": []}),
+            json!({
+                "summary": "I need to inspect the called helper.",
+                "findings": [],
+                "lookups": [{
+                    "kind": "read",
+                    "path": "src/defs.rs",
+                    "start": 1,
+                    "end": 1,
+                    "why": "Check the helper contract before concluding."
+                }]
+            }),
+        );
+        let tree = crate::lanes::coverage::test_support::DelayedTree::new(
+            std::time::Duration::from_millis(15),
+        );
+        let config = config_with_passes(2);
+        let mut diffs = large_diffs();
+        diffs[0].path = "src/auth.rs".into();
+        let pr = pull_request();
+        let file_contents = BTreeMap::new();
+
+        let (outcome, trace) = crate::lanes::coverage::test_support::capture_trace(async {
+            let lane = Critique::new(model);
+            let input = LaneInput {
+                config: &config,
+                pull_request: &pr,
+                diffs: &diffs,
+                file_contents: &file_contents,
+                scan_findings: &[],
+                commits: &[],
+                repo_policy: None,
+                extracted_rules: &[],
+                reviewed_evidence: "",
+                prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
+                retrieved_context: "",
+                redaction_note: "",
+                e2e: None,
+                tree: Some(&tree),
+                graph: None,
+                pass_yield_observer: None,
+            };
+            let prepared = prepare(input.preparation());
+            lane.run_prepared_with_execution(input, prepared, Some(execution))
+                .await
+                .expect("a typed adaptive refusal is a partial lane result")
+        })
+        .await;
+
+        assert_eq!(
+            handle.calls(),
+            2,
+            "the third model call is refused before dispatch"
+        );
+        assert_eq!(outcome.spend.usage.input_tokens, 8);
+        assert_eq!(outcome.spend.usage.output_tokens, 4);
+        assert!((outcome.spend.usage.cost_usd - 0.25).abs() < f64::EPSILON);
+        assert!(outcome.unanswered.contains(&"src/auth.rs".to_string()));
+        assert!(outcome.omissions.iter().any(|omission| {
+            omission.paths.contains(&"src/auth.rs".to_string())
+                && omission.reason == crate::lanes::fanout::OmissionReason::CallLimit
+        }));
+        let event = trace
+            .lines()
+            .find(|line| line.contains("adaptive review passes"))
+            .expect("adaptive pass accounting is emitted");
+        assert!(event.contains("stop_reason=\"refused\""), "{event}");
+        assert!(event.contains("input_tokens=8"), "{event}");
+        assert!(event.contains("output_tokens=4"), "{event}");
+        assert!(event.contains("cost_usd=0.25"), "{event}");
+        let elapsed_ms = event
+            .split("model_elapsed_ms=")
+            .nth(1)
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<u64>().ok())
+            .expect("adaptive elapsed field is present");
+        assert!(elapsed_ms >= 10, "the accounted lookup took 15ms: {event}");
     }
 
     #[tokio::test]
@@ -1729,11 +2941,13 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("runs");
@@ -1789,11 +3003,13 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: &reviewed,
                 prior_findings: &["Close the socket on the error path".to_string()],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("runs");
@@ -1848,11 +3064,13 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("runs");
@@ -1897,11 +3115,13 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("the failure is isolated, not propagated");
@@ -2038,11 +3258,13 @@ fn helper() {
                 extracted_rules: &[],
                 reviewed_evidence: "",
                 prior_findings: &[],
+                retrieval_status: crate::retrieve::RetrievalStatus::Off,
                 retrieved_context: "",
                 redaction_note: "",
                 e2e: None,
                 tree: None,
                 graph: None,
+                pass_yield_observer: None,
             })
             .await
             .expect("runs");

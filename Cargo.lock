@@ -174,6 +174,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-lock"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
+dependencies = [
+ "event-listener",
+ "event-listener-strategy",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1133,6 +1144,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "event-listener"
+version = "5.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
+dependencies = [
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1747,7 +1778,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -2469,7 +2500,7 @@ dependencies = [
  "tokio-util",
  "typed-builder",
  "uuid",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -2897,6 +2928,12 @@ dependencies = [
  "primeorder",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "parking"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "parking_lot"
@@ -3417,7 +3454,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -3558,9 +3595,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
@@ -3595,9 +3632,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4220,7 +4257,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -4294,6 +4331,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tinystoragedrivers-core",
  "tinytools",
  "tokio",
  "tracing",
@@ -4497,7 +4535,7 @@ dependencies = [
 
 [[package]]
 name = "tinybox-bus"
-version = "0.1.38"
+version = "0.1.40"
 dependencies = [
  "serde",
  "serde_json",
@@ -4529,7 +4567,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-bus"
-version = "0.1.36"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4544,7 +4582,7 @@ dependencies = [
 
 [[package]]
 name = "tinycomputer-bus"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4553,7 +4591,7 @@ dependencies = [
 
 [[package]]
 name = "tinyconnectors-bus"
-version = "0.19.3"
+version = "0.21.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4570,16 +4608,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinyflows-drivers"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tinystoragedrivers-core",
- "tracing",
-]
-
-[[package]]
 name = "tinyflows-import"
 version = "0.1.0"
 dependencies = [
@@ -4591,7 +4619,6 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "tinyflows-bus",
- "tinyflows-drivers",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tracing",
@@ -4709,7 +4736,7 @@ dependencies = [
 
 [[package]]
 name = "tinymcp-bus"
-version = "0.19.2"
+version = "0.19.5"
 dependencies = [
  "base64 0.23.1",
  "schemars",
@@ -4720,7 +4747,7 @@ dependencies = [
 
 [[package]]
 name = "tinymemory-api"
-version = "1.28.0"
+version = "2.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4734,7 +4761,7 @@ dependencies = [
 
 [[package]]
 name = "tinymemory-integrations"
-version = "1.28.0"
+version = "2.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4753,27 +4780,33 @@ dependencies = [
  "tinyredact",
  "tokio",
  "tracing",
+ "url",
  "walkdir",
 ]
 
 [[package]]
 name = "tinymemory-tools"
-version = "1.28.0"
+version = "2.0.0"
 dependencies = [
+ "async-lock",
  "async-trait",
  "chrono",
  "futures",
  "log",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tinymemory-api",
+ "url",
+ "uuid",
 ]
 
 [[package]]
 name = "tinyredact"
-version = "1.28.0"
+version = "2.0.0"
 dependencies = [
  "log",
  "regex",
@@ -4825,7 +4858,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror",
+ "tinystoragedrivers-schema",
  "tokio",
  "ulid",
  "zstd",
@@ -4841,6 +4874,15 @@ dependencies = [
  "serde_json",
  "tinystoragedrivers-core",
  "tokio",
+]
+
+[[package]]
+name = "tinystoragedrivers-schema"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -5719,14 +5761,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -6364,8 +6406,8 @@ version = "0.1.6"
 
 [[patch.unused]]
 name = "tinychannels"
-version = "0.1.36"
+version = "0.1.38"
 
 [[patch.unused]]
 name = "tinyflows"
-version = "0.8.23"
+version = "0.8.28"

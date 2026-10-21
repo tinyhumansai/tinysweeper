@@ -6,13 +6,14 @@
 //! # Reading a tree is not running one
 //!
 //! The security boundary says contributor code is never executed, and a
-//! shallow `git fetch` of one commit does not execute any: no build, no
+//! server-owned bare mirrors and disposable exact-head worktrees do not execute
+//! contributor code: no build, no
 //! dependency install, no repository script. The two ways git *could* run
 //! something are both closed explicitly rather than left to defaults —
 //! `core.hooksPath` is pointed at nowhere so a hook in the fetched history
 //! cannot fire, and `GIT_TERMINAL_PROMPT=0` stops a credential prompt turning
-//! a fetch into a hang. [`Checkout::fetch`] is the only place in the crate that
-//! spawns a process, and the only program it will spawn is `git`.
+//! a fetch into a hang. Git children are supervised through cancellation and
+//! timeout; the only program this module spawns is `git`.
 //!
 //! # The token is not in argv
 //!
@@ -21,7 +22,7 @@
 //! for anything on the host to read. Git's `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
 //! environment protocol takes the same config through the environment instead,
 //! so the header is set without the credential ever appearing on a command
-//! line. The temporary directory is removed when the [`Checkout`] is dropped.
+//! line. A review worktree is removed when the [`Checkout`] is dropped.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -37,7 +38,7 @@ use crate::error::{Error, Result};
 /// one, not to police clone size.
 pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
-/// A shallow checkout of exactly one commit, deleted when dropped.
+/// A disposable checkout of exactly one commit, deleted when dropped.
 #[derive(Debug)]
 pub struct Checkout {
     dir: tempfile::TempDir,
@@ -88,27 +89,34 @@ impl Checkout {
         // webhook payload and are about to be command arguments; a `--`-leading
         // value would be read as an option by git even though it cannot escape
         // the argv boundary into a shell.
-        if revision.len() != 40 || !revision.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(Error::config(format!(
-                "`{revision}` is not a commit sha; the indexer fetches one commit by id"
-            )));
-        }
+        validate_revision(revision)?;
         if repo.starts_with('-') || !repo.contains('/') || repo.contains("..") {
             return Err(Error::config(format!("`{repo}` is not owner/name")));
         }
 
+        Self::fetch_url(&format!("https://{host}/{repo}.git"), revision, token, None).await
+    }
+
+    /// Fetch one commit from an explicit remote through the same hardened Git
+    /// runner as the production host URL. The explicit URL exists so cache
+    /// tests can use a local bare repository without opening a network socket.
+    async fn fetch_url(
+        url: &str,
+        revision: &str,
+        token: &str,
+        fetch_count: Option<&std::sync::atomic::AtomicUsize>,
+    ) -> Result<Self> {
         let dir = tempfile::Builder::new()
             .prefix("tinysweeper-index-")
             .tempdir()
             .map_err(|err| Error::Forge(format!("could not make a checkout directory: {err}")))?;
         let root = dir.path().to_path_buf();
-        let url = format!("https://{host}/{repo}.git");
 
         git(&root, token, &["init", "--quiet"]).await?;
         // `--depth 1` of one commit id: the whole history is never on disk, so
         // indexing a monorepo costs its tree rather than its history. `--no-tags`
         // because a tag is a ref we would fetch and never look at.
-        git(
+        git_fetch(
             &root,
             token,
             &[
@@ -117,9 +125,10 @@ impl Checkout {
                 "--depth",
                 "1",
                 "--no-tags",
-                &url,
+                url,
                 revision,
             ],
+            fetch_count,
         )
         .await?;
         git(
@@ -133,6 +142,93 @@ impl Checkout {
             dir,
             revision: revision.to_string(),
         })
+    }
+
+    /// Create a disposable exact-head worktree from a server-owned mirror.
+    pub(super) async fn from_mirror(
+        mirror: &Path,
+        revision: &str,
+        cache_lock: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<Self> {
+        let dir = tempfile::Builder::new()
+            .prefix("tinysweeper-review-")
+            .tempdir()
+            .map_err(|err| Error::Forge(format!("could not make a checkout directory: {err}")))?;
+        Self::from_mirror_at_owned(mirror, revision, dir, Some(cache_lock), || async {}).await
+    }
+
+    /// Populate an owned temporary directory as an exact-head worktree.
+    /// Taking the directory explicitly also lets tests exercise cancellation
+    /// when Git chooses a suffixed admin name for a colliding basename.
+    #[cfg(test)]
+    pub(super) async fn from_mirror_at(
+        mirror: &Path,
+        revision: &str,
+        dir: tempfile::TempDir,
+    ) -> Result<Self> {
+        Self::from_mirror_at_owned(mirror, revision, dir, None, || async {}).await
+    }
+
+    async fn from_mirror_at_owned<F, Fut>(
+        mirror: &Path,
+        revision: &str,
+        dir: tempfile::TempDir,
+        cache_lock: Option<tokio::sync::OwnedMutexGuard<()>>,
+        checkpoint: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        validate_revision(revision)?;
+        git(mirror, "", &["worktree", "prune", "--expire", "now"]).await?;
+        let path = std::fs::canonicalize(dir.path())
+            .map_err(|err| Error::Forge(format!("could not resolve checkout directory: {err}")))?;
+        let registration = WorktreeRegistrationCleanup::for_path(mirror, &path)?;
+        let dir = populate_worktree(
+            mirror,
+            &path,
+            revision,
+            dir,
+            cache_lock,
+            registration,
+            checkpoint,
+        )
+        .await?;
+        Ok(Self {
+            dir,
+            revision: revision.to_string(),
+        })
+    }
+
+    /// Populate a bare mirror with one exact commit, using the hardened Git
+    /// runner so the read credential remains an ephemeral environment value.
+    pub(super) async fn fetch_into_mirror(
+        mirror: &Path,
+        url: &str,
+        revisions: &[&str],
+        token: &str,
+        fetch_count: Option<&std::sync::atomic::AtomicUsize>,
+    ) -> Result<()> {
+        for revision in revisions {
+            validate_revision(revision)?;
+        }
+        git(mirror, "", &["init", "--bare", "--quiet"]).await?;
+        let mut args = vec!["fetch", "--quiet", "--depth", "1", "--no-tags", url];
+        args.extend_from_slice(revisions);
+        git_fetch(mirror, token, &args, fetch_count).await
+    }
+
+    /// Return whether an immutable commit is already present in the mirror.
+    pub(super) async fn mirror_has_revision(mirror: &Path, revision: &str) -> Result<bool> {
+        validate_revision(revision)?;
+        Ok(git_stdout(
+            mirror,
+            "",
+            &["cat-file", "-e", &format!("{revision}^{{commit}}")],
+        )
+        .await
+        .is_ok())
     }
 
     /// Fetch allowed submodules recursively into this checkout, shallowly.
@@ -162,7 +258,7 @@ impl Checkout {
         token: &str,
         allowed: &[String],
     ) -> Result<Unfetched> {
-        self.fetch_submodules_with(host, token, allowed, |dir, url, gitlink| async move {
+        self.fetch_submodules_with(host, token, allowed, None, |dir, url, gitlink| async move {
             std::fs::create_dir_all(&dir).map_err(|err| {
                 Error::Forge(format!("could not make a submodule directory: {err}"))
             })?;
@@ -191,12 +287,77 @@ impl Checkout {
         .await
     }
 
+    /// Fetch allowlisted submodules needed by a change from `base_revision`
+    /// to this checkout's pinned revision.
+    ///
+    /// Only changed gitlinks are fetched here. Later tree reads under an
+    /// unchanged or unavailable submodule fall back to the forge reader.
+    pub async fn fetch_submodules_for_diff(
+        &self,
+        base_revision: &str,
+        host: &str,
+        token: &str,
+        allowed: &[String],
+    ) -> Result<Unfetched> {
+        self.fetch_submodules_for_diff_with(
+            base_revision,
+            host,
+            token,
+            allowed,
+            |dir, url, gitlink| async move {
+                std::fs::create_dir_all(&dir).map_err(|err| {
+                    Error::Forge(format!("could not make a submodule directory: {err}"))
+                })?;
+                git(&dir, token, &["init", "--quiet"]).await?;
+                git(
+                    &dir,
+                    token,
+                    &[
+                        "fetch",
+                        "--quiet",
+                        "--depth",
+                        "1",
+                        "--no-tags",
+                        &url,
+                        &gitlink,
+                    ],
+                )
+                .await?;
+                git(
+                    &dir,
+                    token,
+                    &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+                )
+                .await
+            },
+        )
+        .await
+    }
+
+    async fn fetch_submodules_for_diff_with<F, Fut>(
+        &self,
+        base_revision: &str,
+        host: &str,
+        token: &str,
+        allowed: &[String],
+        fetch: F,
+    ) -> Result<Unfetched>
+    where
+        F: FnMut(std::path::PathBuf, String, String) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        let changed = changed_gitlinks(self.path(), base_revision, &self.revision).await?;
+        self.fetch_submodules_with(host, token, allowed, Some(&changed), fetch)
+            .await
+    }
+
     /// Walk declared gitlinks using the same policy for each repository.
     async fn fetch_submodules_with<F, Fut>(
         &self,
         host: &str,
         token: &str,
         allowed: &[String],
+        changed_paths: Option<&std::collections::BTreeSet<String>>,
         mut fetch: F,
     ) -> Result<Unfetched>
     where
@@ -234,6 +395,11 @@ impl Checkout {
                 } else {
                     format!("{prefix}/{}", sub.path)
                 };
+                if prefix.is_empty()
+                    && changed_paths.is_some_and(|paths| !paths.contains(&sub.path))
+                {
+                    continue;
+                }
                 let Some(repo) = &sub.repo else {
                     unfetched.denied.push(full_path);
                     continue;
@@ -306,6 +472,163 @@ impl Checkout {
     }
 }
 
+/// Git can leave a worktree registration locked as "initializing" if an
+/// add is cancelled. `worktree prune` deliberately preserves locked entries,
+/// so this guard owns and removes only the unique admin path for its tempdir.
+struct WorktreeRegistrationCleanup {
+    worktrees_path: std::path::PathBuf,
+    existing_entries: std::collections::HashSet<std::ffi::OsString>,
+    worktree_gitdir: std::path::PathBuf,
+    armed: bool,
+}
+
+impl WorktreeRegistrationCleanup {
+    fn for_path(mirror: &Path, worktree: &Path) -> Result<Self> {
+        let worktrees_path = mirror.join("worktrees");
+        let existing_entries = match std::fs::symlink_metadata(&worktrees_path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                let entries = std::fs::read_dir(&worktrees_path).map_err(|err| {
+                    Error::Forge(format!("could not inspect mirror worktree metadata: {err}"))
+                })?;
+                let mut names = std::collections::HashSet::new();
+                for entry in entries {
+                    let entry = entry.map_err(|err| {
+                        Error::Forge(format!("could not inspect mirror worktree entry: {err}"))
+                    })?;
+                    names.insert(entry.file_name());
+                }
+                names
+            }
+            Ok(_) => {
+                return Err(Error::config(
+                    "mirror worktree administration path is not a directory",
+                ));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                std::collections::HashSet::new()
+            }
+            Err(err) => {
+                return Err(Error::Forge(format!(
+                    "could not inspect mirror worktree metadata: {err}"
+                )));
+            }
+        };
+        Ok(Self {
+            worktrees_path,
+            existing_entries,
+            worktree_gitdir: worktree.join(".git"),
+            armed: true,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WorktreeRegistrationCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let entries = match std::fs::read_dir(&self.worktrees_path) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+            Err(err) => {
+                tracing::warn!(path = %self.worktrees_path.display(), %err, "could not inspect cancelled worktree metadata");
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            if self.existing_entries.contains(&entry.file_name()) {
+                continue;
+            }
+            let admin = entry.path();
+            let Ok(metadata) = entry.file_type() else {
+                continue;
+            };
+            if !metadata.is_dir() || metadata.is_symlink() {
+                continue;
+            }
+            let locked = admin.join("locked");
+            let is_initializing = std::fs::symlink_metadata(&locked).is_ok_and(|metadata| {
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && std::fs::read_to_string(&locked)
+                        .is_ok_and(|reason| reason.trim() == "initializing")
+            });
+            let gitdir = admin.join("gitdir");
+            let points_to_owned_worktree =
+                std::fs::symlink_metadata(&gitdir).is_ok_and(|metadata| {
+                    metadata.is_file()
+                        && !metadata.file_type().is_symlink()
+                        && std::fs::read_to_string(&gitdir)
+                            .is_ok_and(|target| Path::new(target.trim()) == self.worktree_gitdir)
+                });
+            if !is_initializing && !points_to_owned_worktree {
+                continue;
+            }
+            if let Err(err) = std::fs::remove_dir_all(&admin) {
+                tracing::warn!(path = %admin.display(), %err, "could not clean cancelled worktree metadata");
+            }
+        }
+    }
+}
+
+async fn changed_gitlinks(
+    checkout: &Path,
+    base_revision: &str,
+    head_revision: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    validate_revision(base_revision)?;
+    validate_revision(head_revision)?;
+    let raw = git_stdout(
+        checkout,
+        "",
+        &[
+            "diff-tree",
+            "--raw",
+            "--no-abbrev",
+            "--no-renames",
+            "--no-commit-id",
+            "-r",
+            "-z",
+            base_revision,
+            head_revision,
+        ],
+    )
+    .await?;
+    let mut changed = std::collections::BTreeSet::new();
+    let mut fields = raw.split('\0');
+    while let Some(metadata) = fields.next() {
+        if metadata.is_empty() {
+            continue;
+        }
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let mut metadata = metadata
+            .strip_prefix(':')
+            .unwrap_or(metadata)
+            .split_ascii_whitespace();
+        let old_mode = metadata.next();
+        let new_mode = metadata.next();
+        if old_mode == Some("160000") || new_mode == Some("160000") {
+            changed.insert(path.to_string());
+        }
+    }
+    Ok(changed)
+}
+
+fn validate_revision(revision: &str) -> Result<()> {
+    if revision.len() != 40 || !revision.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::config(format!(
+            "`{revision}` is not a commit sha; the indexer fetches one commit by id"
+        )));
+    }
+    Ok(())
+}
+
 /// Reject existing symlink components before creating or initializing a repo.
 /// A lexical containment check alone does not keep a nested checkout on disk
 /// inside the root when a contributor supplied a symlink along the path.
@@ -350,16 +673,222 @@ async fn git(root: &Path, token: &str, args: &[&str]) -> Result<()> {
     git_stdout(root, token, args).await.map(|_| ())
 }
 
-/// Run one git command in `root` and return what it printed.
-async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
+/// Run the checkout's actual Git fetch command and optionally record its
+/// invocation for tests that use a local bare remote.
+async fn git_fetch(
+    root: &Path,
+    token: &str,
+    args: &[&str],
+    fetch_count: Option<&std::sync::atomic::AtomicUsize>,
+) -> Result<()> {
+    if let Some(count) = fetch_count {
+        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    git_stdout(root, token, args).await.map(|_| ())
+}
+
+/// Populate a disposable worktree under a task that owns its directory,
+/// repository lock and registration until every Git child has exited.
+async fn populate_worktree<F, Fut>(
+    mirror: &Path,
+    path: &Path,
+    revision: &str,
+    dir: tempfile::TempDir,
+    cache_lock: Option<tokio::sync::OwnedMutexGuard<()>>,
+    registration: WorktreeRegistrationCleanup,
+    checkpoint: F,
+) -> Result<tempfile::TempDir>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let path_text = path
+        .to_str()
+        .ok_or_else(|| Error::config("review worktree path is not valid UTF-8"))?
+        .to_string();
+    let mirror = mirror.to_path_buf();
+    let worktree = path.to_path_buf();
+    let revision = revision.to_string();
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+    let mut cancellation = CancelGitTask(Some(cancel_tx));
+    let worker = tokio::spawn(async move {
+        let dir = dir;
+        let cache_lock = cache_lock;
+        let mut registration = registration;
+        let add_args = [
+            "worktree",
+            "add",
+            "--no-checkout",
+            "--quiet",
+            "--detach",
+            &path_text,
+            &revision,
+        ];
+        let mut add = quiet_git_command(&mirror, &add_args)
+            .spawn()
+            .map_err(|err| Error::Forge(format!("could not run git worktree add: {err}")))?;
+        let status = match wait_for_git_child(&mut add, &mut cancel_rx, "worktree add").await {
+            Ok(status) => status,
+            Err(err) => {
+                if err.process_exited {
+                    drop(registration);
+                    drop(cache_lock);
+                    drop(dir);
+                } else {
+                    // A live child may still be mutating both the checkout and
+                    // mirror. Leak these owners rather than delete its paths.
+                    std::mem::forget(registration);
+                    std::mem::forget(cache_lock);
+                    std::mem::forget(dir);
+                }
+                return Err(err.error);
+            }
+        };
+        if !status.success() {
+            return Err(Error::Forge(format!(
+                "git worktree add failed with status {status}"
+            )));
+        }
+        let reset_args = [
+            "-c",
+            "checkout.workers=1",
+            "reset",
+            "--hard",
+            "--no-recurse-submodules",
+            &revision,
+        ];
+        let mut reset = quiet_git_command(&worktree, &reset_args)
+            .spawn()
+            .map_err(|err| Error::Forge(format!("could not run git checkout reset: {err}")))?;
+        let status = match wait_for_git_child(&mut reset, &mut cancel_rx, "checkout reset").await {
+            Ok(status) => status,
+            Err(err) => {
+                if err.process_exited {
+                    drop(registration);
+                    drop(cache_lock);
+                    drop(dir);
+                } else {
+                    std::mem::forget(registration);
+                    std::mem::forget(cache_lock);
+                    std::mem::forget(dir);
+                }
+                return Err(err.error);
+            }
+        };
+        if !status.success() {
+            return Err(Error::Forge(format!(
+                "git checkout reset failed with status {status}"
+            )));
+        }
+        tokio::select! {
+            _ = checkpoint() => {
+                registration.disarm();
+                drop(cache_lock);
+                Ok(dir)
+            }
+            _ = &mut cancel_rx => {
+                drop(registration);
+                drop(cache_lock);
+                drop(dir);
+                Err(Error::Forge("git worktree add setup was cancelled".to_string()))
+            }
+        }
+    });
+    let result = worker
+        .await
+        .map_err(|err| Error::Forge(format!("git worktree supervisor failed: {err}")))?;
+    cancellation.disarm();
+    result
+}
+
+fn quiet_git_command(root: &Path, args: &[&str]) -> Command {
+    let mut command = git_command(root, "", args);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    command
+}
+
+struct GitChildWaitError {
+    error: Error,
+    process_exited: bool,
+}
+
+async fn wait_for_git_child(
+    child: &mut tokio::process::Child,
+    cancel: &mut tokio::sync::oneshot::Receiver<()>,
+    operation: &str,
+) -> std::result::Result<std::process::ExitStatus, GitChildWaitError> {
+    tokio::select! {
+        result = child.wait() => match result {
+            Ok(status) => Ok(status),
+            Err(err) => {
+                let (process_exited, termination) = terminate_git_child(child).await;
+                Err(GitChildWaitError {
+                    error: Error::Forge(format!("could not wait for git {operation}: {err}{termination}")),
+                    process_exited,
+                })
+            }
+        },
+        _ = cancel => {
+            let (process_exited, termination) = terminate_git_child(child).await;
+            Err(GitChildWaitError {
+                error: Error::Forge(format!("git {operation} was cancelled{termination}")),
+                process_exited,
+            })
+        }
+        _ = tokio::time::sleep(GIT_TIMEOUT) => {
+            let (process_exited, termination) = terminate_git_child(child).await;
+            Err(GitChildWaitError {
+                error: Error::Forge(format!("git {operation} timed out{termination}")),
+                process_exited,
+            })
+        }
+    }
+}
+
+async fn terminate_git_child(child: &mut tokio::process::Child) -> (bool, String) {
+    let kill_result = child.kill().await;
+    match child.wait().await {
+        Ok(_) => (true, String::new()),
+        Err(wait_error) => (
+            false,
+            format!(
+                "; could not confirm Git process exit (kill: {}; wait: {wait_error}); checkout and cache registration were preserved",
+                kill_result
+                    .err()
+                    .map_or_else(|| "sent".to_string(), |err| err.to_string())
+            ),
+        ),
+    }
+}
+
+struct CancelGitTask(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl CancelGitTask {
+    fn disarm(&mut self) {
+        self.0.take();
+    }
+}
+
+impl Drop for CancelGitTask {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+/// Construct Git with the same isolated, hook-free configuration for every
+/// process path, including the cancellation-supervised worktree add.
+fn git_command(root: &Path, token: &str, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(root)
         .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         // Dropping `command.output()` — GIT_TIMEOUT firing below, or the
         // caller's own deadline cancelling this future first, `review_inner`'s
         // `run.deadline` among them — must not leave `git` running unsupervised.
@@ -386,7 +915,16 @@ async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
             "GIT_CONFIG_VALUE_1",
             format!("Authorization: Basic {}", basic_auth(token)),
         );
+    command
+}
 
+/// Run one git command in `root` and return what it printed.
+async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
+    let mut command = git_command(root, token, args);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let output = tokio::time::timeout(GIT_TIMEOUT, command.output())
         .await
         .map_err(|_| Error::Forge(format!("git {} timed out", args[0])))?
@@ -477,6 +1015,248 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn cancelling_worktree_setup_removes_only_its_initializing_registration() {
+        let fixture = tempfile::tempdir().unwrap();
+        let revision = fixture_repo(fixture.path(), "", &[]).await;
+        let mirror = tempfile::tempdir().unwrap();
+        git(mirror.path(), "", &["init", "--bare", "--quiet"])
+            .await
+            .unwrap();
+        Checkout::fetch_into_mirror(
+            mirror.path(),
+            fixture.path().to_str().unwrap(),
+            &[&revision],
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let cancelled = tempfile::tempdir().unwrap();
+        let basename = cancelled.path().file_name().unwrap();
+        let active_root = tempfile::tempdir().unwrap();
+        let active = active_root.path().join(basename);
+        git(
+            mirror.path(),
+            "",
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                active.to_str().unwrap(),
+                &revision,
+            ],
+        )
+        .await
+        .unwrap();
+
+        let (registered, wait) = tokio::sync::oneshot::channel();
+        let mirror_path = mirror.path().to_path_buf();
+        let revision = revision.clone();
+        let cancelled_path = cancelled.path().to_path_buf();
+        let repo_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        let cache_lock = repo_lock.clone().lock_owned().await;
+        let lock_probe = repo_lock.clone();
+        let setup = tokio::spawn(async move {
+            let _checkout = Checkout::from_mirror_at_owned(
+                &mirror_path,
+                &revision,
+                cancelled,
+                Some(cache_lock),
+                || async move {
+                    let _ = registered.send(());
+                    std::future::pending::<()>().await;
+                },
+            )
+            .await;
+        });
+        wait.await.unwrap();
+        let worktrees = mirror.path().join("worktrees");
+        let active_admin = worktrees
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|admin| {
+                std::fs::read_to_string(admin.join("gitdir"))
+                    .is_ok_and(|target| target.trim() == active.join(".git").to_string_lossy())
+            })
+            .unwrap();
+        let own_admin = worktrees
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|admin| {
+                std::fs::read_to_string(admin.join("gitdir")).is_ok_and(|target| {
+                    target.trim() == cancelled_path.join(".git").to_string_lossy()
+                })
+            })
+            .unwrap();
+        assert_ne!(
+            active_admin, own_admin,
+            "Git selected a distinct suffixed registration"
+        );
+        assert!(
+            lock_probe.try_lock().is_err(),
+            "the repository lock remains owned while the setup supervisor is active"
+        );
+        assert!(
+            cancelled_path.exists(),
+            "the setup owner retains its TempDir"
+        );
+        setup.abort();
+        assert!(setup.await.unwrap_err().is_cancelled());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while own_admin.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled setup supervisor removes its registration");
+
+        assert!(!own_admin.exists(), "cancelled registration is removed");
+        assert!(
+            active_admin.is_dir(),
+            "live sibling registration is preserved"
+        );
+        assert!(
+            !cancelled_path.exists(),
+            "cancelled TempDir is removed after metadata"
+        );
+        assert!(
+            repo_lock.try_lock().is_ok(),
+            "the repository lock is released after setup cleanup"
+        );
+        assert_eq!(
+            std::fs::read_to_string(active_admin.join("gitdir"))
+                .unwrap()
+                .trim(),
+            active.join(".git").to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_registration_uses_canonical_path_under_symlinked_tempdir() {
+        let fixture = tempfile::tempdir().unwrap();
+        let revision = fixture_repo(fixture.path(), "", &[]).await;
+        let mirror = tempfile::tempdir().unwrap();
+        git(mirror.path(), "", &["init", "--bare", "--quiet"])
+            .await
+            .unwrap();
+        Checkout::fetch_into_mirror(
+            mirror.path(),
+            fixture.path().to_str().unwrap(),
+            &[&revision],
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let physical_parent = tempfile::tempdir().unwrap();
+        let symlink_parent = physical_parent.path().join("tmp-alias");
+        std::os::unix::fs::symlink(physical_parent.path(), &symlink_parent).unwrap();
+        let checkout_dir = tempfile::Builder::new()
+            .prefix("review-")
+            .tempdir_in(&symlink_parent)
+            .unwrap();
+        let lexical_path = checkout_dir.path().to_path_buf();
+        let canonical_path = std::fs::canonicalize(&lexical_path).unwrap();
+
+        let checkout = Checkout::from_mirror_at(mirror.path(), &revision, checkout_dir)
+            .await
+            .unwrap();
+        let git_file = std::fs::read_to_string(checkout.path().join(".git")).unwrap();
+        let admin_path = git_file
+            .trim()
+            .strip_prefix("gitdir: ")
+            .map(Path::new)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(admin_path.join("gitdir"))
+                .unwrap()
+                .trim(),
+            canonical_path.join(".git").to_string_lossy()
+        );
+        assert!(checkout.path().join(".git").is_file());
+    }
+
+    #[tokio::test]
+    async fn cancelled_git_supervisor_kills_and_reaps_a_live_child() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let revision = fixture_repo(fixture.path(), "", &[]).await;
+        let mut command = git_command(fixture.path(), "", &["cat-file", "--batch"]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut output = tokio::io::BufReader::new(stdout);
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+        let wait = tokio::spawn(async move {
+            let waited = wait_for_git_child(&mut child, &mut cancel_rx, "cat-file batch").await;
+            let reaped = child.try_wait().unwrap();
+            (waited, reaped)
+        });
+
+        stdin
+            .write_all(format!("{revision}\n").as_bytes())
+            .await
+            .unwrap();
+        stdin.flush().await.unwrap();
+        let mut response = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            output.read_line(&mut response),
+        )
+        .await
+        .expect("Git should answer promptly")
+        .unwrap();
+        assert!(response.starts_with(&format!("{revision} commit ")));
+        let _stdin = stdin;
+
+        cancel_tx.send(()).unwrap();
+        let (waited, reaped) = tokio::time::timeout(std::time::Duration::from_secs(2), wait)
+            .await
+            .expect("the cancelled Git child should be reaped promptly")
+            .unwrap();
+        let Err(wait_error) = waited else {
+            panic!("cancellation must terminate the wait with an error");
+        };
+        assert!(wait_error.error.to_string().contains("cancelled"));
+        assert!(wait_error.process_exited);
+        assert!(
+            reaped.is_some(),
+            "the helper returns only after Git is reaped"
+        );
+    }
+
+    #[test]
+    fn cancellation_guard_removes_owned_initializing_entry_before_gitdir_exists() {
+        let mirror = tempfile::tempdir().unwrap();
+        let checkout = tempfile::tempdir().unwrap();
+        let basename = checkout.path().file_name().unwrap();
+        let admin = mirror.path().join("worktrees").join(basename);
+        let cleanup =
+            WorktreeRegistrationCleanup::for_path(mirror.path(), checkout.path()).unwrap();
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(admin.join("locked"), "initializing").unwrap();
+
+        drop(cleanup);
+
+        assert!(
+            !admin.exists(),
+            "owned initializing metadata must be removed even before Git writes gitdir"
+        );
+    }
+
     async fn fixture_repo(root: &Path, modules: &str, links: &[(&str, &str)]) -> String {
         std::fs::create_dir_all(root).unwrap();
         git(root, "", &["init", "--quiet"]).await.unwrap();
@@ -549,7 +1329,7 @@ mod tests {
             let outer = outer.clone();
             let inner = inner.clone();
             let result = checkout
-                .fetch_submodules_with("github.com", "", &allowed, move |dir, url, pin| {
+                .fetch_submodules_with("github.com", "", &allowed, None, move |dir, url, pin| {
                     recorded.lock().unwrap().push((url.clone(), pin.clone()));
                     let source = if url.ends_with("acme/outer.git") {
                         outer.clone()
@@ -625,6 +1405,7 @@ mod tests {
                 "github.com",
                 "",
                 &["acme/outer".to_string(), "acme/inner".to_string()],
+                None,
                 move |dir, url, pin| {
                     let source = outer.clone();
                     async move {
@@ -656,12 +1437,105 @@ mod tests {
             revision: "0".repeat(40),
         };
         let result = checkout
-            .fetch_submodules_with("github.com", "", &[], |_, _, _| async {
+            .fetch_submodules_with("github.com", "", &[], None, |_, _, _| async {
                 panic!("no gitlinks to fetch")
             })
             .await
             .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_gitlink_does_not_fetch_a_submodule_for_an_ordinary_diff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), "", &["init", "--quiet"]).await.unwrap();
+        std::fs::write(
+            dir.path().join(".gitmodules"),
+            "[submodule \"lib\"]\npath = vendor/lib\nurl = https://github.com/acme/lib\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("README.md"), "before\n").unwrap();
+        git(dir.path(), "", &["add", ".gitmodules", "README.md"])
+            .await
+            .unwrap();
+        let pin = "1".repeat(40);
+        git(
+            dir.path(),
+            "",
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{pin},vendor/lib"),
+            ],
+        )
+        .await
+        .unwrap();
+        git(
+            dir.path(),
+            "",
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+        )
+        .await
+        .unwrap();
+        let base = git_stdout(dir.path(), "", &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string();
+        std::fs::write(dir.path().join("README.md"), "after\n").unwrap();
+        git(dir.path(), "", &["add", "README.md"]).await.unwrap();
+        git(
+            dir.path(),
+            "",
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "ordinary file change",
+            ],
+        )
+        .await
+        .unwrap();
+        let revision = git_stdout(dir.path(), "", &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string();
+        let checkout = Checkout { dir, revision };
+        let fetches = AtomicUsize::new(0);
+
+        let unfetched = checkout
+            .fetch_submodules_for_diff_with(
+                &base,
+                "github.com",
+                "",
+                &["acme/lib".into()],
+                |_, _, _| {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(unfetched.is_empty());
+        assert_eq!(fetches.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(unix)]
@@ -683,6 +1557,7 @@ mod tests {
                 "github.com",
                 "",
                 &["acme/lib".to_string()],
+                None,
                 |_, _, _| async { panic!("symlink destination must not be fetched") },
             )
             .await
@@ -714,6 +1589,7 @@ mod tests {
                     "github.com",
                     "",
                     &["acme/lib".to_string()],
+                    None,
                     |_, _, _| async { panic!("external manifest must not be read") }
                 )
                 .await
@@ -730,7 +1606,7 @@ mod tests {
         // delete a test that says not to.
         let source = std::fs::read_to_string(file!()).expect("reads its own source");
         let body = source
-            .split("#[cfg(test)]")
+            .split("#[cfg(test)]\nmod tests {")
             .next()
             .expect("source before the tests");
         let spawned: Vec<&str> = body

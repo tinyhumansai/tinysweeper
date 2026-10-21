@@ -6,6 +6,7 @@
 //! turn them into a comment.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::config::types::Severity;
 
@@ -157,12 +158,29 @@ pub struct ChangeMap {
 }
 
 impl ChangeMap {
-    /// Whether there is anything worth drawing.
-    ///
-    /// A set of disconnected names is not a flow. Only draw when the graph can
-    /// explain at least one relationship.
+    /// Whether at least four changed, non-test symbols make a diagram useful.
     pub fn worth_drawing(&self) -> bool {
-        !self.links.is_empty()
+        let drawable: BTreeSet<usize> = self
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(_, component)| is_diagram_symbol(component))
+            .map(|(index, _)| index)
+            .collect();
+        let changed: BTreeSet<&str> = self
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(index, component)| {
+                drawable.contains(index) && component.role == Role::Changed
+            })
+            .map(|(_, component)| component.name.as_str())
+            .collect();
+        changed.len() >= 4
+            && self
+                .links
+                .iter()
+                .any(|link| drawable.contains(&link.from) && drawable.contains(&link.to))
     }
 
     /// The behaviours the change edits.
@@ -174,4 +192,54 @@ impl ChangeMap {
     pub fn impacted(&self) -> impl Iterator<Item = &Component> {
         self.components.iter().filter(|c| c.role == Role::Impacted)
     }
+}
+
+/// Whether a symbol is useful and safe to show in the behavioural diagram.
+pub(crate) fn is_diagram_symbol(component: &Component) -> bool {
+    let Some((path, symbol)) = component.name.split_once('#') else {
+        return false;
+    };
+    let path = path.to_ascii_lowercase();
+    if path.split('/').any(|part| {
+        part == "tests" || part == "test" || part.starts_with("test_") || part.ends_with("_test.rs")
+    }) {
+        return false;
+    }
+    let symbol = symbol.to_ascii_lowercase();
+    if symbol
+        .split("::")
+        .any(|part| part == "tests" || part.starts_with("test_"))
+        || symbol.ends_with("_test")
+        || symbol.ends_with("_tests")
+    {
+        return false;
+    }
+    !matches!(
+        symbol.as_str(),
+        "call"
+            | "json"
+            | "test"
+            | "tests"
+            | "module"
+            | "struct"
+            | "impl"
+            | "function"
+            | "class"
+            | "def"
+            | "use"
+            | "import"
+            | "return"
+            | "async"
+            | "await"
+            | "fn"
+            | "let"
+            | "const"
+            | "pub"
+            | "crate"
+            | "self"
+            | "new"
+            | "default"
+            | "build"
+            | "from"
+    )
 }

@@ -1,0 +1,30 @@
+schema = 1
+id = "oh-8061-privacy-docs-contract-mismatch"
+title = "Historical miss: The newly documented blocking behavior conflicted with unchanged public privacy-mode and capability descriptions that still promised speech uploads."
+fixture = "../fixtures/oh-8061-privacy-docs-contract-mismatch.json"
+lanes = ["critique"]
+labels = ["recall", "historical-miss", "external-review", "rust"]
+exhaustive = false
+
+# Frozen diff/commits are pinned to the exact external review head. The current
+# PR body was augmented with later review fixes and would disclose the answer;
+# the preserved history lacks the original body, so this fixture omits it.
+# Comments are empty because the exact original review-time snapshot is absent.
+[budget]
+max_cost_usd = 0.50
+
+[provenance]
+repo = "tinyhumansai/openhuman"
+pr = 8061
+evidence = "https://github.com/tinyhumansai/openhuman/pull/8061#discussion_r4302645013 ; fix: https://github.com/tinyhumansai/openhuman/commit/cb8773cb9d9d5f29f8a1dfcfa224b30aca5f948d ; reviewed head a5f5838d165a6d5f0f044f58ff494ca4eb112398 ; same-head TinySweeper review: https://github.com/tinyhumansai/openhuman/pull/8061#pullrequestreview-5557748713 ; source: https://github.com/tinyhumansai/openhuman/blob/a5f5838d165a6d5f0f044f58ff494ca4eb112398/crates/openhuman-core/src/voice/README.md#L418"
+labelled_by = "enamakel"
+labelled_on = "2026-10-19"
+
+[[expected]]
+# Fix regression: crates/openhuman-core/src/platform/about_app/catalog_tests.rs::speech_recognition_description_explains_local_only_blocking
+id = "E1"
+path = "crates/openhuman-core/src/voice/README.md"
+lines = [418, 418]
+severity_min = "high"
+summary = "The newly documented blocking behavior conflicted with unchanged public privacy-mode and capability descriptions that still promised speech uploads."
+must_mention = ["privacy|local.only|local_only", "speech|voice|dictation|transcription", "contradict|mismatch|out.of.date|stale|still says|claims", "upload|leave|device|blocked"]

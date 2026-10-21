@@ -1,0 +1,206 @@
+{
+  "pull_request": {
+    "number": 102,
+    "title": "Make OAuth pending sign-ins storable outside the process",
+    "body": "",
+    "author": "senamakel",
+    "author_is_bot": false,
+    "draft": false,
+    "base_ref": "main",
+    "base_sha": "7bdc741ed5147e850cb15d61fd043757a9c6d4ee",
+    "head_ref": "",
+    "head_sha": "40080aa060db089df841e00274e38c2723615fdd",
+    "from_fork": true,
+    "labels": [],
+    "mergeable": null,
+    "open": true,
+    "merged": false,
+    "approvals": 0,
+    "age_days": 0,
+    "quiet_days": 0
+  },
+  "files": [
+    {
+      "path": "crates/tinymcp/src/lib.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 2,
+      "deletions": 1,
+      "patch": "@@ -95,7 +95,8 @@ pub use config_servers::{\n };\n pub use error::{Error, Result};\n pub use registry::{\n-    AppliedServer, ConfigApplyReport, Connections, McpRegistry, OAuthFlow, ProbeOutcome,\n+    AppliedServer, ConfigApplyReport, Connections, McpRegistry, MemoryPendingStore, OAuthFlow,\n+    PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore, ProbeOutcome,\n     REMOTE_REQUEST_TIMEOUT, SecretRef, SecretVault, ServerRef, Store, SupervisedHost, Supervisor,\n     SupervisorConfig, SupervisorEvent, TickReport,\n };",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/mod.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 3,
+      "deletions": 1,
+      "patch": "@@ -24,7 +24,9 @@ pub use boot::{BootOutcome, connect_installed_servers};\n pub use config_doc::{AppliedServer, ConfigApplyReport};\n pub use connections::{Connections, ProbeOutcome, REMOTE_REQUEST_TIMEOUT};\n pub use oauth::{\n-    AuthDetection, AuthKind, DEFAULT_CLIENT_NAME, OAuthBundle, OAuthCredentialStore, OAuthFlow,\n+    AuthDetection, AuthKind, DEFAULT_CLIENT_NAME, MemoryPendingStore, OAuthBundle,\n+    OAuthCredentialStore, OAuthFlow, PENDING_TTL_SECS, PendingAuthorization,\n+    PendingAuthorizationStore,\n };\n pub use ops::McpRegistry;\n pub use setup::{SecretRef, SecretVault};",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/flow.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 55,
+      "deletions": 45,
+      "patch": "@@ -1,18 +1,18 @@\n //! Running the authorization-code flow.\n \n-use std::collections::HashMap;\n+use std::sync::Arc;\n use std::time::Duration;\n \n use base64::Engine as _;\n-use parking_lot::Mutex;\n use reqwest::Url;\n use serde_json::{Value, json};\n use sha2::{Digest, Sha256};\n \n use super::credentials::OAuthCredentialStore;\n use super::endpoint_guard::{guard_endpoint, guarded_client};\n+use super::pending::{MemoryPendingStore, PendingAuthorization, PendingAuthorizationStore};\n use super::tokens::{due_refresh, exchange_refresh, oauth_failure_reason, persist, post_form};\n-use super::types::{AuthDetection, PendingAuthorization, TokenResponse};\n+use super::types::{AuthDetection, TokenResponse};\n use crate::error::{Error, Result};\n use crate::transport::http::McpHttpClient;\n use tinymcp_bus::McpProxyConfig;\n@@ -21,13 +21,6 @@ use tinymcp_bus::McpProxyConfig;\n const B64: base64::engine::general_purpose::GeneralPurpose =\n     base64::engine::general_purpose::URL_SAFE_NO_PAD;\n \n-/// How long an unfinished authorization stays parked.\n-///\n-/// A user who starts a sign-in and closes the tab leaves an entry behind\n-/// holding a client secret. Ten minutes is longer than any real sign-in and\n-/// short enough that abandoned ones do not accumulate.\n-const PENDING_TTL: Duration = Duration::from_secs(10 * 60);\n-\n /// How long to wait on an authorization server.\n const AUTH_SERVER_TIMEOUT_SECS: u64 = 20;\n \n@@ -43,15 +36,16 @@ pub const DEFAULT_CLIENT_NAME: &str = \"TinyMCP\";\n \n /// Runs browser sign-in for HTTP-remote servers.\n ///\n-/// Holds the authorizations parked between the redirect out and back. One\n-/// instance per host; two would not see each other's pending state, and a\n-/// redirect would come back to the wrong one.\n+/// Parks authorizations between the redirect out and back in a\n+/// [`PendingAuthorizationStore`]: this process's memory by default, so one\n+/// instance per host. Instances sharing a store with\n+/// [`Self::with_pending_store`] may each complete what another began.\n #[derive(Debug)]\n pub struct OAuthFlow {\n     http: reqwest::Client,\n     no_redirect_http: reqwest::Client,\n     proxy: Option<McpProxyConfig>,\n-    pending: Mutex<HashMap<String, PendingAuthorization>>,\n+    pending: Arc<dyn PendingAuthorizationStore>,\n     public_endpoints_only: bool,\n     client_name: String,\n }\n@@ -81,7 +75,7 @@ impl OAuthFlow {\n             http,\n             no_redirect_http,\n             proxy,\n-            pending: Mutex::new(HashMap::new()),\n+            pending: Arc::new(MemoryPendingStore::new()),\n             public_endpoints_only: false,\n             client_name: DEFAULT_CLIENT_NAME.to_string(),\n         })\n@@ -103,6 +97,17 @@ impl OAuthFlow {\n         self\n     }\n \n+    /// Parks authorizations in `store` instead of this process's memory.\n+    ///\n+    /// For a host running several instances behind one callback: with a store\n+    /// they all share, the instance the redirect lands on completes a sign-in\n+    /// another began. See [`PendingAuthorizationStore`].\n+    #[must_use]\n+    pub fn with_pending_store(mut self, store: Arc<dyn PendingAuthorizationStore>) -> Self {\n+        self.pending = store;\n+        self\n+    }\n+\n     /// The client name sent during dynamic registration.\n     #[must_use]\n     pub fn client_name(&self) -> &str {\n@@ -270,11 +275,9 @@ impl OAuthFlow {\n         let (code_verifier, code_challenge) = generate_pkce();\n         let state = uuid::Uuid::new_v4().to_string();\n \n-        {\n-            let mut pending = self.pending.lock();\n-            prune_expired(&mut pending);\n-            pending.insert(\n-                state.clone(),\n+        self.pending\n+            .park(\n+                &state,\n                 PendingAuthorization {\n                     server_id: server_id.to_string(),\n                     code_verifier,\n@@ -284,8 +287,8 @@ impl OAuthFlow {\n                     redirect_uri: redirect_uri.to_string(),\n                     started_at: super::tokens::now_unix(),\n                 },\n-            );\n-        }\n+            )\n+            .await?;\n \n         let authorize_url = Url::parse_with_params(\n             &authorization_endpoint,\n@@ -313,22 +316,26 @@ impl OAuthFlow {\n     ///\n     /// The pending entry is consumed whether or not the exchange succeeds: a\n     /// code is single-use, so a retry with the same state could never work and\n-    /// keeping the entry would only hold a secret in memory.\n+    /// keeping the entry would only hold a secret in the store. Taking it is\n+    /// atomic in the store, so two completions of one state exchange the code\n+    /// at most once.\n     ///\n     /// # Errors\n     ///\n     /// Returns [`Error::MalformedResponse`] when the state is unknown or\n-    /// expired, plus whatever the token endpoint returns.\n+    /// expired, whatever the pending store reports when it cannot be read,\n+    /// plus whatever the token endpoint returns.\n     pub async fn complete<S>(&self, store: &S, state: &str, code: &str) -> Result<String>\n     where\n         S: OAuthCredentialStore + ?Sized,\n     {\n-        let pending = {\n-            let mut pending = self.pending.lock();\n-            prune_expired(&mut pending);\n-            pending.remove(state)\n-        }\n-        .ok_or_else(|| Error::malformed(\"unknown or expired oauth state\"))?;\n+        let now = super::tokens::now_unix();\n+        let pending = self\n+            .pending\n+            .take(state)\n+            .await?\n+            .filter(|pending| !pending.expired_at(now))\n+            .ok_or_else(|| Error::malformed(\"unknown or expired oauth state\"))?;\n \n         let mut form: Vec<(&str, &str)> = vec![\n             (\"grant_type\", \"authorization_code\"),\n@@ -394,19 +401,27 @@ impl OAuthFlow {\n     /// A browser redirect carries no session, so a host keeping credentials\n     /// per tenant learns which store to [`complete`](Self::complete) into from\n     /// the returned `state` alone. `None` when the state is unknown or expired.\n-    #[must_use]\n-    pub fn pending_server(&self, state: &str) -> Option<String> {\n-        let mut pending = self.pending.lock();\n-        prune_expired(&mut pending);\n-        pending.get(state).map(|parked| parked.server_id.clone())\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the pending store reports when it cannot be read.\n+    pub async fn pending_server(&self, state: &str) -> Result<Option<String>> {\n+        let now = super::tokens::now_unix();\n+        Ok(self\n+            .pending\n+            .peek(state)\n+            .await?\n+            .filter(|parked| !parked.expired_at(now))\n+            .map(|parked| parked.server_id))\n     }\n \n     /// How many authorizations are parked. For tests and diagnostics.\n-    #[must_use]\n-    pub fn pending_count(&self) -> usize {\n-        let mut pending = self.pending.lock();\n-        prune_expired(&mut pending);\n-        pending.len()\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the pending store reports when it cannot be read.\n+    pub async fn pending_count(&self) -> Result<usize> {\n+        self.pending.count().await\n     }\n \n     pub(super) async fn registration_client(\n@@ -546,11 +561,6 @@ fn generate_pkce() -> (String, String) {\n ///\n /// Each holds a client secret, so leaving them is a slow leak of credentials\n /// into a map nothing ever reads again.\n-fn prune_expired(pending: &mut HashMap<String, PendingAuthorization>) {\n-    let cutoff = super::tokens::now_unix().saturating_sub(PENDING_TTL.as_secs());\n-    pending.retain(|_, authorization| authorization.started_at >= cutoff);\n-}\n-\n /// Exposes [`generate_pkce`] to the module's tests.\n #[cfg(test)]\n pub(super) fn generate_pkce_for_test() -> (String, String) {",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/mod.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 7,
+      "deletions": 1,
+      "patch": "@@ -11,7 +11,9 @@\n //!    is frequently wrong about this.\n //! 2. [`OAuthFlow::begin`] discovers the authorization server, registers a\n //!    client dynamically (RFC 7591), generates a PKCE pair, parks the pending\n-//!    state, and returns the authorize URL for a browser.\n+//!    state in a [`PendingAuthorizationStore`] (memory by default; a shared\n+//!    one for a host running several instances), and returns the authorize\n+//!    URL for a browser.\n //! 3. [`OAuthFlow::complete`] takes the code and state from the redirect,\n //!    exchanges the code, and persists the token.\n //!\n@@ -47,11 +49,15 @@\n pub(crate) mod credentials;\n pub(crate) mod endpoint_guard;\n pub(crate) mod flow;\n+pub(crate) mod pending;\n pub(crate) mod tokens;\n pub(crate) mod types;\n \n pub use credentials::OAuthCredentialStore;\n pub use flow::{DEFAULT_CLIENT_NAME, OAuthFlow};\n+pub use pending::{\n+    MemoryPendingStore, PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore,\n+};\n pub use tokens::{OAUTH_BUNDLE_KEY, refresh_if_expired};\n pub use types::{AuthDetection, AuthKind, OAuthBundle};\n ",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/mod_host_store_tests.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 144,
+      "deletions": 4,
+      "patch": "@@ -114,9 +114,16 @@ async fn the_server_a_pending_state_belongs_to_can_be_read_before_completing() {\n         .unwrap();\n     let state = authorize_param(&url, \"state\").unwrap();\n \n-    assert_eq!(flow.pending_server(&state).as_deref(), Some(TENANT_SERVER));\n-    assert_eq!(flow.pending_count(), 1, \"peeking does not consume\");\n-    assert_eq!(flow.pending_server(\"never-issued\"), None);\n+    assert_eq!(\n+        flow.pending_server(&state).await.unwrap().as_deref(),\n+        Some(TENANT_SERVER)\n+    );\n+    assert_eq!(\n+        flow.pending_count().await.unwrap(),\n+        1,\n+        \"peeking does not consume\"\n+    );\n+    assert_eq!(flow.pending_server(\"never-issued\").await.unwrap(), None);\n }\n \n #[tokio::test]\n@@ -291,7 +298,7 @@ async fn a_guarded_flow_refuses_an_internal_authorization_server() {\n \n     assert!(error.to_string().contains(\"https\"), \"{error}\");\n     assert_eq!(state.registrations.load(Ordering::SeqCst), 0);\n-    assert_eq!(flow.pending_count(), 0);\n+    assert_eq!(flow.pending_count().await.unwrap(), 0);\n }\n \n #[tokio::test]\n@@ -357,3 +364,136 @@ async fn desktop_flow_keeps_the_default_clients() {\n             .is_none()\n     );\n }\n+\n+// ---------------------------------------------------------------------------\n+// Several instances sharing one pending store\n+// ---------------------------------------------------------------------------\n+\n+/// A host running several instances behind one callback URL: the redirect\n+/// lands on whichever instance the load balancer picks, so the one that\n+/// completes is not the one that began.\n+#[tokio::test]\n+async fn a_sign_in_begun_on_one_instance_completes_on_another_sharing_its_store() {\n+    let (endpoint, authority) = authority_with_challenge().await;\n+    let host = HostSecrets::remote(&endpoint);\n+    let shared: Arc<dyn PendingAuthorizationStore> = Arc::new(MemoryPendingStore::new());\n+    let first = flow().with_pending_store(shared.clone());\n+    let second = flow().with_pending_store(shared.clone());\n+\n+    let url = first\n+        .begin(&host, TENANT_SERVER, \"https://host.test/oauth/callback\")\n+        .await\n+        .expect(\"begin\");\n+    let state = authorize_param(&url, \"state\").unwrap();\n+\n+    assert_eq!(\n+        second.pending_server(&state).await.unwrap().as_deref(),\n+        Some(TENANT_SERVER)\n+    );\n+    let server_id = second\n+        .complete(&host, &state, \"the-code\")\n+        .await\n+        .expect(\"complete on the other instance\");\n+\n+    assert_eq!(server_id, TENANT_SERVER);\n+    assert_eq!(\n+        host.get(TENANT_SERVER, \"Authorization\").as_deref(),\n+        Some(\"Bearer at-1\")\n+    );\n+    assert_eq!(authority.exchanges.load(Ordering::SeqCst), 1);\n+    assert_eq!(shared.count().await.unwrap(), 0);\n+}\n+\n+/// Two instances racing to complete the same redirect exchange the code once.\n+#[tokio::test]\n+async fn racing_completions_of_one_state_exchange_the_code_once() {\n+    let (endpoint, authority) = authority_with_challenge().await;\n+    let host = HostSecrets::remote(&endpoint);\n+    let shared: Arc<dyn PendingAuthorizationStore> = Arc::new(MemoryPendingStore::new());\n+    let first = flow().with_pending_store(shared.clone());\n+    let second = flow().with_pending_store(shared);\n+\n+    let url = first\n+        .begin(&host, TENANT_SERVER, \"https://host.test/oauth/callback\")\n+        .await\n+        .unwrap();\n+    let state = authorize_param(&url, \"state\").unwrap();\n+\n+    let (a, b) = tokio::join!(\n+        first.complete(&host, &state, \"the-code\"),\n+        second.complete(&host, &state, \"the-code\"),\n+    );\n+\n+    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);\n+    assert_eq!(authority.exchanges.load(Ordering::SeqCst), 1);\n+}\n+\n+/// A host store that keeps entries past their lifetime cannot complete a\n+/// stale sign-in: the flow checks the age itself.\n+#[tokio::test]\n+async fn an_expired_authorization_in_a_lazy_store_is_refused() {\n+    #[derive(Debug, Default)]\n+    struct NeverExpires(parking_lot::Mutex<BTreeMap<String, PendingAuthorization>>);\n+\n+    impl PendingAuthorizationStore for NeverExpires {\n+        fn park<'a>(\n+            &'a self,\n+            state: &'a str,\n+            pending: PendingAuthorization,\n+        ) -> futures_util::future::BoxFuture<'a, crate::Result<()>> {\n+            self.0.lock().insert(state.to_string(), pending);\n+            Box::pin(std::future::ready(Ok(())))\n+        }\n+\n+        fn take<'a>(\n+            &'a self,\n+            state: &'a str,\n+        ) -> futures_util::future::BoxFuture<'a, crate::Result<Option<PendingAuthorization>>>\n+        {\n+            Box::pin(std::future::ready(Ok(self.0.lock().remove(state))))\n+        }\n+\n+        fn peek<'a>(\n+            &'a self,\n+            state: &'a str,\n+        ) -> futures_util::future::BoxFuture<'a, crate::Result<Option<PendingAuthorization>>>\n+        {\n+            Box::pin(std::future::ready(Ok(self.0.lock().get(state).cloned())))\n+        }\n+\n+        fn count(&self) -> futures_util::future::BoxFuture<'_, crate::Result<usize>> {\n+            Box::pin(std::future::ready(Ok(self.0.lock().len())))\n+        }\n+    }\n+\n+    let (endpoint, authority) = authority_with_challenge().await;\n+    let host = HostSecrets::remote(&endpoint);\n+    let lazy = Arc::new(NeverExpires::default());\n+    lazy.park(\n+        \"stale\",\n+        PendingAuthorization {\n+            server_id: TENANT_SERVER.into(),\n+            code_verifier: \"v\".into(),\n+            client_id: \"client-1\".into(),\n+            client_secret: None,\n+            token_endpoint: format!(\"{endpoint}/token\"),\n+            redirect_uri: \"https://host.test/oauth/callback\".into(),\n+            started_at: 1,\n+        },\n+    )\n+    .await\n+    .unwrap();\n+    let flow = flow().with_pending_store(lazy);\n+\n+    assert_eq!(flow.pending_server(\"stale\").await.unwrap(), None);\n+    let error = flow\n+        .complete(&host, \"stale\", \"the-code\")\n+        .await\n+        .expect_err(\"expired\");\n+\n+    assert!(\n+        matches!(error, Error::MalformedResponse { .. }),\n+        \"{error:?}\"\n+    );\n+    assert_eq!(authority.exchanges.load(Ordering::SeqCst), 0);\n+}",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/mod_tests.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 7,
+      "deletions": 3,
+      "patch": "@@ -20,6 +20,7 @@ use axum::{Json, Router};\n use serde_json::{Value, json};\n \n use super::flow::{DEFAULT_CLIENT_NAME, OAuthFlow};\n+use super::pending::{MemoryPendingStore, PendingAuthorization, PendingAuthorizationStore};\n use super::tokens::{OAUTH_BUNDLE_KEY, refresh_if_expired};\n use super::types::{AuthKind, TokenResponse};\n use crate::Error;\n@@ -561,7 +562,10 @@ async fn completing_with_an_unknown_state_is_refused() {\n \n #[tokio::test]\n async fn a_fresh_flow_has_nothing_parked() {\n-    assert_eq!(OAuthFlow::new(None).unwrap().pending_count(), 0);\n+    assert_eq!(\n+        OAuthFlow::new(None).unwrap().pending_count().await.unwrap(),\n+        0\n+    );\n }\n \n // ---------------------------------------------------------------------------\n@@ -910,7 +914,7 @@ async fn beginning_parks_exactly_one_pending_authorization() {\n         .await\n         .unwrap();\n \n-    assert_eq!(flow.pending_count(), 1);\n+    assert_eq!(flow.pending_count().await.unwrap(), 1);\n }\n \n #[tokio::test]\n@@ -1317,7 +1321,7 @@ async fn a_state_is_consumed_even_when_the_exchange_fails() {\n \n     let _ = flow.complete(&store, &returned_state, \"the-code\").await;\n \n-    assert_eq!(flow.pending_count(), 0);\n+    assert_eq!(flow.pending_count().await.unwrap(), 0);\n     let error = flow\n         .complete(&store, &returned_state, \"the-code\")\n         .await",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/pending.rs",
+      "previous_path": null,
+      "status": "added",
+      "additions": 190,
+      "deletions": 0,
+      "patch": "@@ -0,0 +1,190 @@\n+//! Where a sign-in waits between the browser redirect out and back.\n+//!\n+//! [`OAuthFlow::begin`] parks the PKCE verifier and the registered client\n+//! under the authorization's `state`; [`OAuthFlow::complete`] takes them back\n+//! when the redirect returns. By default they wait in this process's memory\n+//! ([`MemoryPendingStore`]), which is right for a desktop host: the redirect\n+//! comes back to the same process that started it.\n+//!\n+//! A host running several instances behind one callback URL cannot rely on\n+//! that. The redirect lands on whichever instance the load balancer picks, so\n+//! the pending authorization has to live somewhere they all see — a shared\n+//! database, say. Such a host implements [`PendingAuthorizationStore`] and\n+//! hands it to [`OAuthFlow::with_pending_store`].\n+//!\n+//! The store keeps entries for at least [`PENDING_TTL_SECS`]; the flow itself\n+//! refuses any entry older than that, so a store that expires lazily (or\n+//! never) still cannot complete a stale sign-in.\n+//!\n+//! [`OAuthFlow::begin`]: super::OAuthFlow::begin\n+//! [`OAuthFlow::complete`]: super::OAuthFlow::complete\n+//! [`OAuthFlow::with_pending_store`]: super::OAuthFlow::with_pending_store\n+\n+use std::collections::HashMap;\n+\n+use futures_util::future::BoxFuture;\n+use parking_lot::Mutex;\n+use serde::{Deserialize, Serialize};\n+\n+use crate::error::Result;\n+\n+/// How long an unfinished authorization stays parked, in seconds.\n+///\n+/// A user who starts a sign-in and closes the tab leaves an entry behind\n+/// holding a PKCE verifier and perhaps a client secret. Ten minutes is longer\n+/// than any real sign-in and short enough that abandoned ones do not\n+/// accumulate. A host store expiring entries itself (a database TTL index)\n+/// uses this as its lifetime.\n+pub const PENDING_TTL_SECS: u64 = 10 * 60;\n+\n+/// An authorization parked between the browser redirect out and back.\n+///\n+/// Public so a host can keep it in its own [`PendingAuthorizationStore`]. It\n+/// holds the PKCE verifier and, for a confidential client, the client secret:\n+/// a host stores it sealed and never logs or displays it. Its `Debug` output\n+/// redacts both.\n+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]\n+pub struct PendingAuthorization {\n+    /// Which install this authorization is for: the host's opaque server id.\n+    pub server_id: String,\n+    /// The PKCE verifier, sent with the code exchange.\n+    pub code_verifier: String,\n+    /// The dynamically registered client.\n+    pub client_id: String,\n+    /// The secret, when the server issued a confidential client.\n+    pub client_secret: Option<String>,\n+    /// Where to exchange the code.\n+    pub token_endpoint: String,\n+    /// The redirect the authorization was started with.\n+    pub redirect_uri: String,\n+    /// When this was parked, in Unix seconds.\n+    pub started_at: u64,\n+}\n+\n+impl PendingAuthorization {\n+    /// Whether this authorization is older than [`PENDING_TTL_SECS`] at `now`\n+    /// (Unix seconds).\n+    #[must_use]\n+    pub fn expired_at(&self, now: u64) -> bool {\n+        self.started_at < now.saturating_sub(PENDING_TTL_SECS)\n+    }\n+}\n+\n+impl std::fmt::Debug for PendingAuthorization {\n+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n+        f.debug_struct(\"PendingAuthorization\")\n+            .field(\"server_id\", &self.server_id)\n+            .field(\"code_verifier\", &\"[redacted]\")\n+            .field(\"client_id\", &self.client_id)\n+            .field(\n+                \"client_secret\",\n+                &self.client_secret.as_ref().map(|_| \"[redacted]\"),\n+            )\n+            .field(\"token_endpoint\", &self.token_endpoint)\n+            .field(\"redirect_uri\", &self.redirect_uri)\n+            .field(\"started_at\", &self.started_at)\n+            .finish()\n+    }\n+}\n+\n+/// Where [`OAuthFlow`](super::OAuthFlow) parks authorizations between the\n+/// redirect out and back.\n+///\n+/// `state` is the random value the flow put in the authorize URL. It is a\n+/// bearer secret for the duration of the sign-in: a host persisting it may key\n+/// entries on a digest of it instead.\n+///\n+/// Object-safe, so a flow holds any store behind one pointer.\n+pub trait PendingAuthorizationStore: Send + Sync + std::fmt::Debug {\n+    /// Parks `pending` under `state`, replacing any entry already there.\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the store reports when it cannot be written.\n+    fn park<'a>(\n+        &'a self,\n+        state: &'a str,\n+        pending: PendingAuthorization,\n+    ) -> BoxFuture<'a, Result<()>>;\n+\n+    /// Removes and returns the entry parked under `state`, or `None` when there\n+    /// is none.\n+    ///\n+    /// Must be atomic: when two callers take the same `state` at once, at most\n+    /// one receives the entry. That is what stops one authorization code from\n+    /// being exchanged twice.\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the store reports when it cannot be read or written.\n+    fn take<'a>(&'a self, state: &'a str) -> BoxFuture<'a, Result<Option<PendingAuthorization>>>;\n+\n+    /// Returns the entry parked under `state` without removing it.\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the store reports when it cannot be read.\n+    fn peek<'a>(&'a self, state: &'a str) -> BoxFuture<'a, Result<Option<PendingAuthorization>>>;\n+\n+    /// How many entries are parked, expired ones included unless the store has\n+    /// already dropped them. For tests and diagnostics.\n+    ///\n+    /// # Errors\n+    ///\n+    /// Whatever the store reports when it cannot be read.\n+    fn count(&self) -> BoxFuture<'_, Result<usize>>;\n+}\n+\n+/// The default store: pending authorizations in this process's memory.\n+///\n+/// Right when the redirect returns to the process that started the sign-in.\n+/// Expired entries are dropped whenever the store is touched.\n+#[derive(Debug, Default)]\n+pub struct MemoryPendingStore {\n+    entries: Mutex<HashMap<String, PendingAuthorization>>,\n+}\n+\n+impl MemoryPendingStore {\n+    /// An empty store.\n+    #[must_use]\n+    pub fn new() -> Self {\n+        Self::default()\n+    }\n+\n+    fn pruned(&self) -> parking_lot::MutexGuard<'_, HashMap<String, PendingAuthorization>> {\n+        let mut entries = self.entries.lock();\n+        let now = super::tokens::now_unix();\n+        entries.retain(|_, pending| !pending.expired_at(now));\n+        entries\n+    }\n+}\n+\n+impl PendingAuthorizationStore for MemoryPendingStore {\n+    fn park<'a>(\n+        &'a self,\n+        state: &'a str,\n+        pending: PendingAuthorization,\n+    ) -> BoxFuture<'a, Result<()>> {\n+        self.pruned().insert(state.to_string(), pending);\n+        Box::pin(std::future::ready(Ok(())))\n+    }\n+\n+    fn take<'a>(&'a self, state: &'a str) -> BoxFuture<'a, Result<Option<PendingAuthorization>>> {\n+        let taken = self.pruned().remove(state);\n+        Box::pin(std::future::ready(Ok(taken)))\n+    }\n+\n+    fn peek<'a>(&'a self, state: &'a str) -> BoxFuture<'a, Result<Option<PendingAuthorization>>> {\n+        let found = self.pruned().get(state).cloned();\n+        Box::pin(std::future::ready(Ok(found)))\n+    }\n+\n+    fn count(&self) -> BoxFuture<'_, Result<usize>> {\n+        let count = self.pruned().len();\n+        Box::pin(std::future::ready(Ok(count)))\n+    }\n+}\n+\n+#[cfg(test)]\n+#[path = \"pending_tests.rs\"]\n+mod tests;",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/pending_tests.rs",
+      "previous_path": null,
+      "status": "added",
+      "additions": 104,
+      "deletions": 0,
+      "patch": "@@ -0,0 +1,104 @@\n+//! The default in-memory pending store, and the redacted shape a host\n+//! persists.\n+\n+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]\n+\n+use super::*;\n+\n+fn parked(started_at: u64) -> PendingAuthorization {\n+    PendingAuthorization {\n+        server_id: \"acme/linear\".into(),\n+        code_verifier: \"verifier-1\".into(),\n+        client_id: \"client-1\".into(),\n+        client_secret: Some(\"secret-1\".into()),\n+        token_endpoint: \"https://auth.test/token\".into(),\n+        redirect_uri: \"https://host.test/oauth/callback\".into(),\n+        started_at,\n+    }\n+}\n+\n+fn now() -> u64 {\n+    super::super::tokens::now_unix()\n+}\n+\n+#[tokio::test]\n+async fn a_parked_authorization_is_taken_once() {\n+    let at = now();\n+    let store = MemoryPendingStore::new();\n+    store.park(\"state-2\", parked(at)).await.unwrap();\n+\n+    assert_eq!(store.take(\"state-2\").await.unwrap(), Some(parked(at)));\n+    assert_eq!(store.take(\"state-2\").await.unwrap(), None);\n+}\n+\n+#[tokio::test]\n+async fn peeking_leaves_the_authorization_parked() {\n+    let store = MemoryPendingStore::new();\n+    store.park(\"state-1\", parked(now())).await.unwrap();\n+\n+    let peeked = store.peek(\"state-1\").await.unwrap().expect(\"parked\");\n+    assert_eq!(peeked.server_id, \"acme/linear\");\n+    assert_eq!(store.count().await.unwrap(), 1);\n+    assert!(store.take(\"state-1\").await.unwrap().is_some());\n+}\n+\n+#[tokio::test]\n+async fn an_unknown_state_finds_nothing() {\n+    let store = MemoryPendingStore::new();\n+\n+    assert_eq!(store.peek(\"never-issued\").await.unwrap(), None);\n+    assert_eq!(store.take(\"never-issued\").await.unwrap(), None);\n+    assert_eq!(store.count().await.unwrap(), 0);\n+}\n+\n+#[tokio::test]\n+async fn an_expired_authorization_is_dropped() {\n+    let store = MemoryPendingStore::new();\n+    store\n+        .park(\"stale\", parked(now() - PENDING_TTL_SECS - 1))\n+        .await\n+        .unwrap();\n+\n+    assert_eq!(store.count().await.unwrap(), 0);\n+    assert_eq!(store.take(\"stale\").await.unwrap(), None);\n+}\n+\n+#[test]\n+fn expiry_is_measured_from_when_it_was_parked() {\n+    let at = 10_000;\n+    assert!(!parked(at).expired_at(at + PENDING_TTL_SECS));\n+    assert!(parked(at).expired_at(at + PENDING_TTL_SECS + 1));\n+    assert!(\n+        !parked(at).expired_at(0),\n+        \"a clock behind the entry is not expiry\"\n+    );\n+}\n+\n+#[test]\n+fn debug_output_redacts_the_verifier_and_secret() {\n+    let rendered = format!(\"{:?}\", parked(1));\n+\n+    assert!(!rendered.contains(\"verifier-1\"), \"{rendered}\");\n+    assert!(!rendered.contains(\"secret-1\"), \"{rendered}\");\n+    assert!(rendered.contains(\"acme/linear\"), \"{rendered}\");\n+}\n+\n+#[test]\n+fn the_serde_representation_is_pinned() {\n+    let value = serde_json::to_value(parked(42)).unwrap();\n+\n+    assert_eq!(\n+        value,\n+        serde_json::json!({\n+            \"server_id\": \"acme/linear\",\n+            \"code_verifier\": \"verifier-1\",\n+            \"client_id\": \"client-1\",\n+            \"client_secret\": \"secret-1\",\n+            \"token_endpoint\": \"https://auth.test/token\",\n+            \"redirect_uri\": \"https://host.test/oauth/callback\",\n+            \"started_at\": 42,\n+        })\n+    );\n+    let back: PendingAuthorization = serde_json::from_value(value).unwrap();\n+    assert_eq!(back, parked(42));\n+}",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/oauth/types.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 0,
+      "deletions": 22,
+      "patch": "@@ -9,28 +9,6 @@ use crate::error::{Error, Result};\n // here so every path through this module keeps resolving.\n pub use tinymcp_bus::{AuthDetection, AuthKind};\n \n-/// An authorization parked between the browser redirect out and back.\n-#[derive(Debug, Clone)]\n-pub(super) struct PendingAuthorization {\n-    /// Which install this authorization is for.\n-    pub(super) server_id: String,\n-    /// The PKCE verifier, sent with the code exchange.\n-    pub(super) code_verifier: String,\n-    /// The dynamically registered client.\n-    pub(super) client_id: String,\n-    /// The secret, when the server issued a confidential client.\n-    pub(super) client_secret: Option<String>,\n-    /// Where to exchange the code.\n-    pub(super) token_endpoint: String,\n-    /// The redirect the authorization was started with.\n-    pub(super) redirect_uri: String,\n-    /// When this was parked, in Unix seconds.\n-    ///\n-    /// Present so an authorization the user abandoned does not sit in memory\n-    /// holding a client secret forever.\n-    pub(super) started_at: u64,\n-}\n-\n /// The bookkeeping needed to mint a new access token without another sign-in.\n ///\n /// Stored as JSON beside the access token under",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/src/registry/ops/mod_tests.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "patch": "@@ -1388,7 +1388,7 @@ async fn the_facade_hands_out_the_pieces_a_host_drives_directly() {\n \n     let (handle, _receiver) = registry.vault().request(\"API_KEY\").await;\n     assert!(registry.vault().submit(&handle, \"sekrit\".into()).await);\n-    assert_eq!(registry.oauth().pending_count(), 0);\n+    assert_eq!(registry.oauth().pending_count().await.unwrap(), 0);\n     assert_eq!(registry.connected_overview().await.len(), 0);\n }\n ",
+      "size_bytes": null
+    },
+    {
+      "path": "crates/tinymcp/tests/public_reexports.rs",
+      "previous_path": null,
+      "status": "modified",
+      "additions": 24,
+      "deletions": 0,
+      "patch": "@@ -25,3 +25,27 @@ fn the_contract_types_resolve_at_the_crate_root_to_the_bus_definitions() {\n     let freshness: tinymcp_bus::RegistryFreshness = RegistryFreshness::LocalFallback;\n     assert_ne!(freshness, RegistryFreshness::Live);\n }\n+\n+#[test]\n+fn the_pending_sign_in_store_api_resolves_at_the_crate_root() {\n+    use std::sync::Arc;\n+    use tinymcp::{\n+        MemoryPendingStore, OAuthFlow, PENDING_TTL_SECS, PendingAuthorization,\n+        PendingAuthorizationStore,\n+    };\n+\n+    let store: Arc<dyn PendingAuthorizationStore> = Arc::new(MemoryPendingStore::new());\n+    let _flow = OAuthFlow::new(None)\n+        .expect(\"the flow builds\")\n+        .with_pending_store(store);\n+    let parked = PendingAuthorization {\n+        server_id: \"docs\".into(),\n+        code_verifier: \"v\".into(),\n+        client_id: \"c\".into(),\n+        client_secret: None,\n+        token_endpoint: \"https://auth.test/token\".into(),\n+        redirect_uri: \"https://host.test/cb\".into(),\n+        started_at: 0,\n+    };\n+    assert!(parked.expired_at(PENDING_TTL_SECS + 1));\n+}",
+      "size_bytes": null
+    }
+  ],
+  "commits": [
+    {
+      "sha": "da7ab5b25d7904cb761fd7e65155919fe1d02dd4",
+      "message": "refactor(registry): simplify pending oauth state handling\n\nReworked the pending OAuth state tracking to make the flow easier to follow and less error-prone. The change keeps the same external behaviour while tidying up how entries are stored and looked up.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "ef3a11a5b03f573be04d15f34364a489580ee079",
+      "message": "feat(oauth): add authorization code flow with PKCE\n\nIntroduce an OAuth authorization code flow that generates PKCE\nchallenge and verifier pairs, builds the authorization URL, and\nexchanges the returned code for tokens. This gives the registry a\nstandards-compliant way to obtain user-scoped credentials.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "825f4533cc8dfcf4f1851996431fb39f3fc531fd",
+      "message": "test(oauth): add coverage for host store and registry ops\n\nAdds tests for the OAuth host store and registry operations modules to\nexercise the new code paths. The added cases cover host persistence and\nthe registry op handlers so regressions surface in CI.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "67e0040a57dacbc99d1f53e8af5bd1cffe104599",
+      "message": "chore(registry): remove unused import\n\nDrop an unused import from the registry module to keep the build\nwarning-free.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "cd42ed40f7770631cdb3d95da7bfdfba4cc7db43",
+      "message": "test(oauth): add pending authorization tests\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "7ddc9d25b120d46615292e0e8bfedb778d50e625",
+      "message": "chore(registry): add host store tests for oauth module\n\nAdds test coverage for the OAuth host store in the registry, exercising\nthe storage and lookup behaviour that was previously untested.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "df5e984454979860643a42acc683325f8b3086b0",
+      "message": "style(oauth): reformat long lines and reorder imports\n\nReformatted long function signatures and assertions in the OAuth pending\nstore and its tests to satisfy line width limits, and reordered the\npending imports in flow.rs and mod_tests.rs. No behaviour changed.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "bc3aea6cecd4384772fe27f91f7785537447ca56",
+      "message": "test(oauth): allow panics in pending store tests\n\nAdd a crate-level allow for clippy's unwrap, expect, and panic lints in the\npending store test module, since panicking is the expected failure mode in\ntests.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "683478c423d270471175a55c1c5b70e12757c586",
+      "message": "feat(tinymcp): export pending authorization types\n\nRe-export the pending authorization store, its in-memory implementation, and the pending TTL constant from the crate root so downstream users can access them without reaching into the registry module.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    },
+    {
+      "sha": "40080aa060db089df841e00274e38c2723615fdd",
+      "message": "test(tinymcp): cover pending sign-in store reexports\n\nAdd a test asserting the pending authorization store API resolves at the\ncrate root, exercising the store trait, in-memory implementation, flow\nwiring, and TTL expiry so the public surface stays reachable.\n\nAuto-committed-on: macbook\nCo-authored-by: Medulla <medulla@tinyhumans.ai>",
+      "author_name": "Steven Enamakel",
+      "author_email": "enamakel@tinyhumans.ai",
+      "patch": null
+    }
+  ],
+  "comments": [],
+  "blobs": {},
+  "lookups": {
+    "read crates/tinymcp/src/registry/oauth/pending.rs:130-155": {
+      "outcome": "text",
+      "text": "  130|     /// already dropped them. For tests and diagnostics.\n  131|     ///\n  132|     /// # Errors\n  133|     ///\n  134|     /// Whatever the store reports when it cannot be read.\n  135|     fn count(&self) -> BoxFuture<'_, Result<usize>>;\n  136| }\n  137| \n  138| /// The default store: pending authorizations in this process's memory.\n  139| ///\n  140| /// Right when the redirect returns to the process that started the sign-in.\n  141| /// Expired entries are dropped whenever the store is touched.\n  142| #[derive(Debug, Default)]\n  143| pub struct MemoryPendingStore {\n  144|     entries: Mutex<HashMap<String, PendingAuthorization>>,\n  145| }\n  146| \n  147| impl MemoryPendingStore {\n  148|     /// An empty store.\n  149|     #[must_use]\n  150|     pub fn new() -> Self {\n  151|         Self::default()\n  152|     }\n  153| \n  154|     fn pruned(&self) -> parking_lot::MutexGuard<'_, HashMap<String, PendingAuthorization>> {\n  155|         let mut entries = self.entries.lock();",
+      "start": 130,
+      "end": 155,
+      "total": 190
+    }
+  }
+}

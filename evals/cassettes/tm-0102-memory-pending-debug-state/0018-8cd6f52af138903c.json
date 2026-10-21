@@ -1,0 +1,32 @@
+{
+  "key": "8cd6f52af138903c",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4359,
+    "output_tokens": 233,
+    "reasoning_tokens": 129,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002762
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/tinymcp/src/registry.rs",
+        "start": 1,
+        "why": "Confirm definitions and visibility of MemoryPendingStore, PENDING_TTL_SECS, PendingAuthorization, and PendingAuthorizationStore."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to verify that the newly re-exported symbols exist and are public in the registry module."
+  }
+}

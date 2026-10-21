@@ -61,6 +61,17 @@ fn parse(text: &str) -> Config {
 }
 
 #[test]
+fn server_pool_sizes_default_to_four_reviews_and_two_triage_jobs() {
+    let defaults = parse("version = 1");
+    assert_eq!(defaults.server.review_concurrency, 4);
+    assert_eq!(defaults.server.triage_concurrency, 2);
+
+    let custom = parse("version = 1\n[server]\nreview_concurrency = 7\ntriage_concurrency = 1\n");
+    assert_eq!(custom.server.review_concurrency, 7);
+    assert_eq!(custom.server.triage_concurrency, 1);
+}
+
+#[test]
 fn reasoning_with_too_small_a_budget_is_rejected() {
     // The production failure this exists to stop: reasoning and the answer are
     // drawn from one allowance, and at 8000 both configured models — the
@@ -335,10 +346,146 @@ fn the_built_in_defaults_are_valid() {
 }
 
 #[test]
-fn review_passes_defaults_to_three_adaptive_attempts() {
+fn model_roles_have_independent_effort_and_global_off_is_a_kill_switch() {
     let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
 
-    assert_eq!(config.review.passes, 3);
+    assert_eq!(config.models.reviewer_reasoning_effort, "medium");
+    assert_eq!(config.models.falsify_reasoning_effort, "low");
+    assert_eq!(config.models.summary_reasoning_effort, "low");
+    assert_eq!(
+        config
+            .models
+            .role_reasoning_effort(crate::config::types::ReasoningRole::Falsify),
+        "low"
+    );
+
+    let mut config = config;
+    config.models.reasoning_effort = "off".into();
+    assert_eq!(
+        config
+            .models
+            .role_reasoning_effort(crate::config::types::ReasoningRole::Reviewer),
+        "off"
+    );
+}
+
+#[test]
+fn blank_global_effort_keeps_all_roles_disabled_and_preserves_the_small_token_floor() {
+    let mut role_failures = Vec::new();
+    for global in ["", "   "] {
+        let config = parse(&format!(
+            "version = 1\n[models]\nmax_tokens = 8000\nreasoning_effort = {global:?}\n"
+        ));
+        assert!(
+            validate::validate(&config).is_empty(),
+            "blank global effort keeps the 8000-token floor valid: {:?}",
+            validate::validate(&config)
+        );
+        for role in [
+            crate::config::types::ReasoningRole::Reviewer,
+            crate::config::types::ReasoningRole::Falsify,
+            crate::config::types::ReasoningRole::Summary,
+        ] {
+            let actual = config.models.role_reasoning_effort(role);
+            if actual != "off" {
+                role_failures.push(format!("global {global:?}, role {role:?}: got {actual:?}"));
+            }
+        }
+    }
+
+    let routed = parse(
+        "version = 1\n[models]\nmax_tokens = 16000\nreasoning_effort = \" \"\n\
+         [[models.routes]]\nmodel = \"deep\"\nmax_tokens = 8000\n",
+    );
+    assert!(
+        validate::validate(&routed).is_empty(),
+        "blank global effort keeps an 8000-token route valid: {:?}",
+        validate::validate(&routed)
+    );
+    assert!(role_failures.is_empty(), "{role_failures:#?}");
+}
+
+#[test]
+fn configured_role_efforts_are_not_replaced_by_role_defaults() {
+    let mut config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+    config.models.reasoning_effort = "high".into();
+    config.models.reviewer_reasoning_effort = "low".into();
+    config.models.falsify_reasoning_effort = "medium".into();
+    config.models.summary_reasoning_effort = "off".into();
+
+    assert_eq!(
+        config
+            .models
+            .role_reasoning_effort(crate::config::types::ReasoningRole::Reviewer),
+        "low"
+    );
+    assert_eq!(
+        config
+            .models
+            .role_reasoning_effort(crate::config::types::ReasoningRole::Falsify),
+        "medium"
+    );
+    assert_eq!(
+        config
+            .models
+            .role_reasoning_effort(crate::config::types::ReasoningRole::Summary),
+        "off"
+    );
+}
+
+#[test]
+fn an_unknown_role_effort_is_rejected() {
+    let config = parse("version = 1\n[models]\nfalsify_reasoning_effort = \"very_low\"\n");
+    let joined = validate::validate(&config).join("\n");
+    assert!(
+        joined.contains("models.falsify_reasoning_effort"),
+        "{joined}"
+    );
+}
+
+#[test]
+fn review_passes_defaults_to_two_adaptive_attempts() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert_eq!(config.review.passes, 2);
+}
+
+#[test]
+fn large_pr_limits_default_to_the_operator_policy() {
+    let config: Config = DEFAULTS.parse::<toml::Table>().unwrap().try_into().unwrap();
+
+    assert!(config.review.large_pr.enabled);
+    assert_eq!(config.review.large_pr.files, 30);
+    assert_eq!(config.review.large_pr.changed_lines, 2_000);
+    assert_eq!(config.review.large_pr.groups, 24);
+    assert_eq!(config.review.large_pr.max_groups, 12);
+    assert_eq!(config.review.large_pr.max_calls, 48);
+    assert_eq!(config.review.large_pr.soft_deadline_percent, 80);
+    assert_eq!(config.review.large_pr.drain_seconds, 30);
+}
+
+#[test]
+fn large_pr_limits_must_be_positive_and_deadline_percent_is_bounded() {
+    let config = parse(
+        "version = 1\n[review.large_pr]\nfiles = 0\nchanged_lines = 0\ngroups = 0\n\
+         max_groups = 0\nmax_calls = 0\nsoft_deadline_percent = 96\ndrain_seconds = 0\n",
+    );
+    let joined = validate::validate(&config).join("\n");
+
+    for key in [
+        "files",
+        "changed_lines",
+        "groups",
+        "max_groups",
+        "max_calls",
+        "soft_deadline_percent",
+        "drain_seconds",
+    ] {
+        assert!(
+            joined.contains(&format!("review.large_pr.{key}")),
+            "{joined}"
+        );
+    }
 }
 
 #[test]
@@ -1430,6 +1577,7 @@ fn load_reports_every_unknown_key_with_its_dotted_path() {
         Some(
             "version = 1\nunknown_root = true\n[review]\nunknown_review = true\n\
              [models.provider]\nunknown_provider = true\n\
+             [review.large_pr]\nunknown_limit = true\n\
              [lanes.custom]\nunknown_lane = true\n",
         ),
         &[],
@@ -1440,6 +1588,7 @@ fn load_reports_every_unknown_key_with_its_dotted_path() {
     for key in [
         "unknown_root",
         "review.unknown_review",
+        "review.large_pr.unknown_limit",
         "models.provider.unknown_provider",
         "lanes.custom.unknown_lane",
     ] {
@@ -1717,4 +1866,14 @@ fn removed_memory_configuration_is_rejected_instead_of_silently_ignored() {
             .get("memory")
             .is_none()
     );
+}
+
+#[test]
+fn server_pool_sizes_must_fit_semaphore_bounds() {
+    let mut config = parse("version = 1\n");
+    config.server.review_concurrency = 0;
+    config.server.triage_concurrency = tokio::sync::Semaphore::MAX_PERMITS + 1;
+    let problems = validate::validate(&config).join("\n");
+    assert!(problems.contains("server.review_concurrency"), "{problems}");
+    assert!(problems.contains("server.triage_concurrency"), "{problems}");
 }

@@ -1,0 +1,39 @@
+{
+  "key": "65d7974e9270db99",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4529,
+    "output_tokens": 352,
+    "reasoning_tokens": 161,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00031445
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 110,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/voice/factory/stt_providers.rs",
+        "start": 70,
+        "why": "Verify the full definition of the ExternalSttProvider constructor to see if the new `endpoint` parameter is correctly added to the signature and used."
+      },
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/egress.rs",
+        "start": 1,
+        "why": "Inspect the signature and contract of `disclose_speech_transfer` to ensure the arguments passed (slug, endpoint, DataKind) match its expectations."
+      }
+    ],
+    "resolved": [],
+    "summary": "No definite defects identified; need to inspect the constructor signature and the disclose_speech_transfer function to confirm correct usage of the new endpoint field."
+  }
+}

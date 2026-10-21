@@ -123,15 +123,20 @@
     "model": "vendor/deep-0905",
     "usage": {
       "cached_tokens": 100,
+      "calls_attempted": 1,
+      "calls_errored": 0,
+      "calls_refused": 0,
+      "calls_succeeded": 1,
       "cost_usd": 0.0021,
       "embed_tokens": 0,
       "input_tokens": 120,
-      "output_tokens": 30
+      "output_tokens": 30,
+      "reasoning_tokens": 10
     },
     "value": {
       "findings": [],
-      "summary": "Looks fine.",
-      "resolved": []
+      "resolved": [],
+      "summary": "Looks fine."
     }
   }
 }

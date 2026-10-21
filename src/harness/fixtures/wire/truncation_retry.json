@@ -241,15 +241,20 @@
     "model": "vendor/deep",
     "usage": {
       "cached_tokens": 200,
+      "calls_attempted": 2,
+      "calls_errored": 0,
+      "calls_refused": 0,
+      "calls_succeeded": 2,
       "cost_usd": 0.0042,
       "embed_tokens": 0,
       "input_tokens": 240,
-      "output_tokens": 60
+      "output_tokens": 60,
+      "reasoning_tokens": 20
     },
     "value": {
       "findings": [],
-      "summary": "Looks fine.",
-      "resolved": []
+      "resolved": [],
+      "summary": "Looks fine."
     }
   }
 }

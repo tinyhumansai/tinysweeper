@@ -1,0 +1,22 @@
+{
+  "key": "71c3f2376fd8caf4",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4789,
+    "output_tokens": 541,
+    "reasoning_tokens": 617,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003747
+  },
+  "value": {
+    "findings": [],
+    "summary": "No additional defects detected beyond the already reported missing constructor parameter."
+  }
+}

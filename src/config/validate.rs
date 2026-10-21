@@ -23,7 +23,9 @@ pub fn validate(config: &Config) -> Vec<String> {
     let mut problems = Vec::new();
 
     validate_version(config, &mut problems);
+    validate_server(config, &mut problems);
     validate_review(config, &mut problems);
+    validate_large_pr(config, &mut problems);
     validate_paths(config, &mut problems);
     validate_models(config, &mut problems);
     validate_submodules(config, &mut problems);
@@ -44,6 +46,20 @@ pub fn validate(config: &Config) -> Vec<String> {
     validate_preview(config, &mut problems);
 
     problems
+}
+
+fn validate_server(config: &Config, problems: &mut Vec<String>) {
+    let max = tokio::sync::Semaphore::MAX_PERMITS;
+    for (name, value) in [
+        ("review_concurrency", config.server.review_concurrency),
+        ("triage_concurrency", config.server.triage_concurrency),
+    ] {
+        if value == 0 || value > max {
+            problems.push(format!(
+                "`server.{name}` must be between 1 and {max} (got {value})"
+            ));
+        }
+    }
 }
 
 fn validate_mcp(config: &Config, problems: &mut Vec<String>) {
@@ -213,6 +229,32 @@ fn validate_review(config: &Config, problems: &mut Vec<String>) {
     }
 }
 
+fn validate_large_pr(config: &Config, problems: &mut Vec<String>) {
+    let policy = &config.review.large_pr;
+    for (key, value) in [
+        ("files", policy.files),
+        ("groups", policy.groups),
+        ("max_groups", policy.max_groups),
+        ("max_calls", policy.max_calls),
+    ] {
+        if value == 0 {
+            problems.push(format!("`review.large_pr.{key} = 0` must be positive"));
+        }
+    }
+    if policy.changed_lines == 0 {
+        problems.push("`review.large_pr.changed_lines = 0` must be positive".into());
+    }
+    if policy.drain_seconds == 0 {
+        problems.push("`review.large_pr.drain_seconds = 0` must be positive".into());
+    }
+    if !(1..=95).contains(&policy.soft_deadline_percent) {
+        problems.push(format!(
+            "`review.large_pr.soft_deadline_percent = {}` is out of range; expected 1 to 95",
+            policy.soft_deadline_percent
+        ));
+    }
+}
+
 fn validate_paths(config: &Config, problems: &mut Vec<String>) {
     for pattern in &config.paths.ignore {
         if let Err(err) = Glob::new(pattern) {
@@ -292,6 +334,30 @@ fn validate_models(config: &Config, problems: &mut Vec<String>) {
 
     if models.max_tokens == 0 {
         problems.push("`models.max_tokens = 0` would produce no output".into());
+    }
+
+    const REASONING_EFFORTS: &[&str] = &["off", "low", "medium", "high", "gateway"];
+    for (key, effort) in [
+        (
+            "models.reviewer_reasoning_effort",
+            &models.reviewer_reasoning_effort,
+        ),
+        (
+            "models.falsify_reasoning_effort",
+            &models.falsify_reasoning_effort,
+        ),
+        (
+            "models.summary_reasoning_effort",
+            &models.summary_reasoning_effort,
+        ),
+    ] {
+        if !REASONING_EFFORTS.contains(&effort.trim()) {
+            problems.push(format!(
+                "`{key} = \"{}\"` is not a reasoning effort; expected one of {}",
+                effort.trim(),
+                known(REASONING_EFFORTS)
+            ));
+        }
     }
 
     // Reasoning is drawn from the same allowance as the answer, and the effort

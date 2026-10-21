@@ -1,11 +1,10 @@
-# Review quality, measured against the labelled corpus in `evals/`.
+# Review quality, measured against two separately recorded groups in `evals/`.
 #
 # This is the *replay* half: it runs the real engine over the committed
 # cassettes — no key, no network, free — scores the proposals under the
-# current matching rules, and reports the drift against the committed
-# baseline as a step summary with the scorecard attached. `cargo test` in
-# `ci.yml` already asserts the two guarded regressions still hold; this job
-# is where the whole scorecard is readable per pull request.
+# current matching rules. The legacy group uses compiled-in defaults and is
+# diagnostic-only; five historical cases use their pinned recording profile
+# and require strict completion. Both scorecards appear in the step summary.
 #
 # The *live* half — `eval run --record` — is an operator command, not a job
 # here. Every model call goes through the box's LLM ladder
@@ -13,9 +12,8 @@
 # and is not reachable from a hosted runner; before that it wanted an
 # `OPENROUTER_API_KEY` this repository never had, so the recording step here
 # 401'd on every call and passed anyway. A run that records nothing and goes
-# green is worse than no run. Re-record on a box with the ladder
-# (`evals/README.md`), commit the cassettes and the refreshed baseline, and
-# this job replays them.
+# green is worse than no run. Re-record only on an authorized operator machine
+# (`evals/README.md`); this workflow never contacts a provider.
 #
 # Deliberately **not** a required check. Run-to-run variance has not been
 # measured yet: the gateway routes where it likes, no `seed` is honoured, and
@@ -28,8 +26,8 @@ on:
   pull_request:
     # Only what can move a score. A change to the server or the automerge gate
     # cannot change what a lane finds, so it should not pay for a replay.
-    # The replay runs under `src/config/defaults.toml`, so that file can move
-    # a score and `.tinysweeper.toml`, which it deliberately ignores, cannot.
+    # Both the default-profile group and the historical recording profile are
+    # explicit score inputs. `.tinysweeper.toml` is deliberately ignored.
     paths:
       - "src/lanes/**"
       - "src/harness/prompt.rs"
@@ -40,6 +38,8 @@ on:
       - "src/config/defaults.toml"
       - "presets/**"
       - "evals/**"
+      - "scripts/check-eval-scorecard.py"
+      - "scripts/test_check_eval_scorecard.py"
       - ".github/workflows/eval.yml"
 
 permissions:
@@ -69,40 +69,62 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      # Strict replay: a call the cassette cannot answer fails its case with
-      # "re-record the corpus", which is the staleness this exists to make
-      # loud — a prompt changed and nobody recorded it.
-      #
-      # Under the compiled-in defaults, not this repository's
-      # `.tinysweeper.toml`: the cassettes are keyed by the model name each
-      # call went to, and are recorded under the defaults so that `cargo
-      # test`'s committed-corpus replay and this one read the same tapes.
-      # The repository config names *ladders* (`flash`, `deep`) that only
-      # resolve on a box running one; replaying it here would miss every
-      # call and report a stale corpus that is not stale.
-      - name: Replay the corpus
-        run: |
-          cargo run --locked --features harness,github -- \
-            eval run --config src/config/defaults.toml
+      - name: Test scorecard validation
+        run: python3 -B -m unittest scripts/test_check_eval_scorecard.py
 
-      # `eval run` scores inline as it goes, but the documented pipeline keeps
-      # scoring separate for exactly the case here: re-reading the proposals
-      # on disk under the current matching rule before reporting, so a rule
-      # edit between records never reports off a stale scorecard.
-      - name: Score the corpus
+      # These older cassettes were recorded under the compiled-in defaults.
+      # Keep the group explicit so future cases cannot silently join it with
+      # a different model profile.
+      - name: Replay the legacy default-profile cases
         run: |
           cargo run --locked --features harness,github -- \
-            eval score --config src/config/defaults.toml
-
-      - name: Compare against the committed baseline
-        run: |
-          cargo run --locked --features harness,github -- \
-            eval report --baseline evals/baselines/current.json \
+            eval run --config src/config/defaults.toml \
+            --case oc-2313-round-boundary-leaks \
+            --case ts-0045-kernel-bypass-hallucination \
+            --case ts-0068-description-anchored-to-code \
+            --out target/eval-ci/legacy-default
+          python3 scripts/check-eval-scorecard.py \
+            target/eval-ci/legacy-default/scorecard.json \
+            --diagnostic \
+            --expected oc-2313-round-boundary-leaks \
+            --expected ts-0045-kernel-bypass-hallucination \
+            --expected ts-0068-description-anchored-to-code \
             >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload the scorecard
+      # These five externally pinned historical cases use the dedicated
+      # GPT-OSS/Novita recording profile. Score only this explicit group and
+      # report its measured values without comparing to a differently bounded
+      # corpus baseline.
+      - name: Replay the historical GPT-OSS/Novita cases
+        if: ${{ !cancelled() }}
+        run: |
+          cargo run --locked --features harness,github -- \
+            eval run --config evals/recording.gptoss-novita.toml \
+            --case tm-0102-memory-pending-debug-state \
+            --case oh-8061-standalone-local-only-policy \
+            --case oh-8061-speech-redirect-origin \
+            --case oh-8061-privacy-docs-contract-mismatch \
+            --case oh-8076-credential-read-failure-migration \
+            --out target/eval-ci/historical-gptoss-novita
+          python3 scripts/check-eval-scorecard.py \
+            target/eval-ci/historical-gptoss-novita/scorecard.json \
+            --expected tm-0102-memory-pending-debug-state \
+            --expected oh-8061-standalone-local-only-policy \
+            --expected oh-8061-speech-redirect-origin \
+            --expected oh-8061-privacy-docs-contract-mismatch \
+            --expected oh-8076-credential-read-failure-migration \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the legacy default-profile scorecard
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: scorecard
-          path: evals/runs/latest/
+          name: scorecard-legacy-default
+          path: target/eval-ci/legacy-default/
+
+      - name: Upload the historical GPT-OSS/Novita scorecard
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scorecard-historical-gptoss-novita
+          path: target/eval-ci/historical-gptoss-novita/

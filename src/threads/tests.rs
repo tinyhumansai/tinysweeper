@@ -172,6 +172,86 @@ fn unchanged_code_is_the_only_case_that_reaches_the_model() {
     assert!(matches!(decide(&thread, &BTreeSet::new()), Decision::Ask));
 }
 
+#[tokio::test]
+async fn an_advisory_deadline_keeps_prior_deterministic_thread_decisions() {
+    use crate::error::{Error, Result};
+    use crate::ports::model::{Model, ModelRequest, ModelResponse};
+    use crate::ports::model_execution::ModelExecutionRefusal;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct DeadlineModel(Arc<AtomicUsize>, ModelExecutionRefusal);
+
+    #[async_trait::async_trait]
+    impl Model for DeadlineModel {
+        async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(Error::ModelExecutionRefused {
+                refusal: self.1,
+                usage: Some(Box::new(crate::ports::model::Usage {
+                    input_tokens: 3,
+                    output_tokens: 1,
+                    calls_attempted: 1,
+                    calls_errored: 1,
+                    cost_usd: 0.125,
+                    ..Default::default()
+                })),
+                accounting_complete: false,
+            })
+        }
+    }
+
+    for refusal in [
+        ModelExecutionRefusal::CallLimit,
+        ModelExecutionRefusal::SoftDeadline,
+        ModelExecutionRefusal::DrainDeadline,
+    ] {
+        let mut first_ask = ours();
+        first_ask.id = "PRRT_ask_1".into();
+        first_ask.is_outdated = false;
+        let mut later_ask = first_ask.clone();
+        later_ask.id = "PRRT_ask_2".into();
+        let mut later_deterministic = ours();
+        later_deterministic.id = "PRRT_2".into();
+        let forge = forge_with(vec![ours(), first_ask, later_ask, later_deterministic]);
+        let mut config = config();
+        config.threads.ask_model = true;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let model = DeadlineModel(calls.clone(), refusal);
+
+        let (plan, spend) = plan(
+            &forge,
+            Some(&model),
+            &config,
+            &repo(),
+            7,
+            &resolved_titles(&[TITLE]),
+        )
+        .await
+        .expect("an optional advisory stop does not discard deterministic decisions");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(plan.resolve.len(), 2);
+        assert_eq!(plan.resolve[0].id, "PRRT_1");
+        assert_eq!(plan.resolve[1].id, "PRRT_2");
+        assert_eq!(
+            spend.usage,
+            crate::ports::model::Usage {
+                input_tokens: 3,
+                output_tokens: 1,
+                calls_attempted: 1,
+                calls_errored: 1,
+                cost_usd: 0.125,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            spend.models,
+            vec![config.model_for_workload(crate::config::types::Workload::ThreadReview)]
+        );
+        assert!(forge.writes().is_empty(), "planning remains read-only");
+    }
+}
+
 fn forge_with(threads: Vec<ReviewThread>) -> MockForge {
     let mut state = MockState::default();
     state.review_threads.insert(7, threads);

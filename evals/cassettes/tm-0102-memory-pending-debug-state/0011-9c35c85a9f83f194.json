@@ -1,0 +1,38 @@
+{
+  "key": "9c35c85a9f83f194",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 5311,
+    "output_tokens": 443,
+    "reasoning_tokens": 322,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003763
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/tinymcp/src/registry/oauth",
+        "pattern": "fn pending_count",
+        "why": "Determine the signature and return type of pending_count after the change."
+      },
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/tinymcp/src/registry/oauth/pending/mod.rs",
+        "start": 1,
+        "why": "Inspect the newly added pending module for async behavior and exported items."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `OAuthFlow::pending_count` and the new `pending` module to confirm the async change compiles and matches expectations."
+  }
+}

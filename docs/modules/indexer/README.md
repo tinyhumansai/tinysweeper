@@ -13,7 +13,8 @@ answer it is built around is "as rarely as possible".
 | `cost.rs` | `EmbedUsage`, the embedding price table, `estimate_tokens` |
 | `mock.rs` | `MockManifest`, `CountingEmbedder` — always compiled |
 | `run.rs` | `Indexer` — the run itself |
-| `fetch.rs` | `Checkout` — a shallow, hook-disabled fetch of one commit. Behind `serve` |
+| `fetch.rs` | `Checkout` — an exact-head, hook-disabled disposable worktree. Behind `serve` |
+| `repository_cache.rs` | Shared private bare mirrors and per-repository checkout serialization. Behind `serve` |
 | `mongo.rs` | `MongoManifest`. Behind `serve` |
 
 The port is `src/ports/manifest.rs`. The server-side driver — which repository
@@ -21,10 +22,17 @@ gets indexed, when, and with which permit — is `src/server/indexing.rs`.
 
 ## Getting the tree without running it
 
-Indexing reads a repository's tree, so the server has to have one. `fetch.rs`
-shallow-fetches exactly one commit into a temporary directory that is deleted
-when the `Checkout` is dropped. This is the crate's only process spawn, and a
-test pins that the only program it will ever spawn is `git`.
+Indexing reads a repository's tree, so the server has to have one. The server's
+`RepositoryCache` keeps a private bare mirror per canonical repository and
+fetches a missing immutable revision once. Indexing and review each get a
+separate exact-head worktree; dropping the `Checkout` removes that worktree.
+Per-repository serialization protects fetch and worktree administration. The
+cache is an optimization, not durable application state: operators may remove
+its configured directory only while the service is stopped. The default path
+is the user's private cache directory, or `TINYSWEEPER_REPOSITORY_CACHE_DIR`.
+
+This is the crate's only process-spawn path, and a test pins that the only
+program it will ever spawn is `git`.
 
 Reading a tree is not running one, and the two ways git could have run something
 are closed rather than left to defaults: `core.hooksPath` is pointed at nowhere,
@@ -37,8 +45,10 @@ remote URL puts a credential in the process table for anything on the host to
 read; git's `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` protocol carries the same
 `http.extraHeader` through the environment instead.
 
-Allowed submodules are fetched recursively at their parent's pinned gitlink,
-with `retrieval.submodules` checked at every level. Cycles, paths through
+Indexing fetches allowlisted gitlinks recursively at each parent's pinned
+commit, with `retrieval.submodules` checked at every level. Reviews fetch only
+allowlisted gitlinks changed between the base and head; unchanged or unavailable
+submodule content falls back to the forge reader. Cycles, paths through
 symlinks and chains beyond 16 levels are refused. Denied and failed nested
 fetches retain their full root-relative paths so stale index entries can be
 handled under the existing revocation and retry policy.

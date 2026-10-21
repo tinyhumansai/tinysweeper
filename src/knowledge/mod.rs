@@ -40,6 +40,80 @@ pub use crate::knowledge::types::{
     MAX_RULE_CHARS, MAX_RULES, ReviewKnowledge, doc_id, valid_instruction_file, valid_slug,
 };
 
+/// Pinned knowledge and instruction-file paths prepared before extraction.
+///
+/// This stage performs no model calls. Large-review admission can therefore
+/// happen after the host has prepared review metadata and before any
+/// repository-authored instructions are sent to a model.
+#[derive(Debug, Clone, Default)]
+pub struct PreparedKnowledge {
+    /// Operator-pinned documents rendered under the configured caps.
+    pub knowledge: ReviewKnowledge,
+    /// Safe, scoped repository instruction paths eligible for extraction.
+    pub instruction_files: Vec<String>,
+}
+
+/// Read pinned documents and prepare the bounded instruction-file list.
+///
+/// This is the no-model-call half of [`gather`]. Repository instruction
+/// contents remain unread until [`extract_prepared`] runs after dispatch
+/// admission.
+pub async fn prepare(
+    config: &Config,
+    repo: &RepoId,
+    changed_paths: &[String],
+    store: Option<&dyn KnowledgeStore>,
+) -> PreparedKnowledge {
+    let mut prepared = PreparedKnowledge::default();
+
+    if let Some(store) = store {
+        let scope = KnowledgeScope::repo(repo.to_string());
+        match store.pinned(&scope).await {
+            Ok(docs) => {
+                prepared.knowledge.pinned = pinned::render(
+                    &docs,
+                    config.knowledge.pinned_doc_chars,
+                    config.knowledge.pinned_total_chars,
+                );
+            }
+            Err(err) => tracing::warn!(%err, "could not read pinned knowledge documents"),
+        }
+    }
+
+    if config.knowledge.extract && config.review.respect_agents_md {
+        prepared.instruction_files =
+            types::scoped_instruction_files(&config.knowledge.files, changed_paths);
+    }
+
+    prepared
+}
+
+/// Extract the prepared repository instructions through the paid model port.
+pub async fn extract_prepared(
+    mut prepared: PreparedKnowledge,
+    forge: &dyn ForgeRead,
+    model: &Arc<dyn Model>,
+    config: &Config,
+    repo: &RepoId,
+    head_sha: &str,
+) -> (ReviewKnowledge, Usage) {
+    let mut usage = Usage::default();
+    if !prepared.instruction_files.is_empty() {
+        let extractor = Extractor::new(
+            model.as_ref(),
+            config.model_for_workload(crate::config::types::Workload::KnowledgeExtraction),
+            config.knowledge.max_file_bytes,
+        );
+        let (rules, extract_usage) = extractor
+            .extract(forge, repo, head_sha, &prepared.instruction_files)
+            .await;
+        usage.add(extract_usage);
+        prepared.knowledge.extracted_rules = rules;
+    }
+
+    (prepared.knowledge, usage)
+}
+
 /// Gather everything the knowledge centre contributes to one review.
 ///
 /// Best-effort throughout: a knowledge store that is unreachable, a file that
@@ -57,41 +131,8 @@ pub async fn gather(
     changed_paths: &[String],
     store: Option<&dyn KnowledgeStore>,
 ) -> (ReviewKnowledge, Usage) {
-    let mut knowledge = ReviewKnowledge::default();
-    let mut usage = Usage::default();
-
-    if let Some(store) = store {
-        let scope = KnowledgeScope::repo(repo.to_string());
-        match store.pinned(&scope).await {
-            Ok(docs) => {
-                knowledge.pinned = pinned::render(
-                    &docs,
-                    config.knowledge.pinned_doc_chars,
-                    config.knowledge.pinned_total_chars,
-                );
-            }
-            Err(err) => tracing::warn!(%err, "could not read pinned knowledge documents"),
-        }
-    }
-
-    // `respect_agents_md` already means "treat the repository's own instruction
-    // files as review policy", so it gates the extraction too rather than
-    // introducing a second switch that means almost the same thing.
-    if config.knowledge.extract && config.review.respect_agents_md {
-        let files = types::scoped_instruction_files(&config.knowledge.files, changed_paths);
-        if !files.is_empty() {
-            let extractor = Extractor::new(
-                model.as_ref(),
-                config.model_for_workload(crate::config::types::Workload::KnowledgeExtraction),
-                config.knowledge.max_file_bytes,
-            );
-            let (rules, extract_usage) = extractor.extract(forge, repo, head_sha, &files).await;
-            usage.add(extract_usage);
-            knowledge.extracted_rules = rules;
-        }
-    }
-
-    (knowledge, usage)
+    let prepared = prepare(config, repo, changed_paths, store).await;
+    extract_prepared(prepared, forge, model, config, repo, head_sha).await
 }
 
 #[cfg(test)]
@@ -157,6 +198,79 @@ mod tests {
             knowledge.extracted_rules,
             vec!["Never unwrap in library code.".to_string()]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pinned_knowledge_survives_instruction_extraction_refused_at_soft_deadline() {
+        let forge = forge_with_agents(
+            "pinned_knowledge_survives_instruction_extraction_refused_at_soft_deadline: retain local context.",
+        );
+        let mock = MockModel::silent();
+        let model: Arc<dyn Model> = Arc::new(mock.clone());
+        let mut config = config();
+        config.knowledge.extract = true;
+        config.review.respect_agents_md = true;
+        config.knowledge.files = vec!["AGENTS.md".into()];
+        let store = MockKnowledgeStore::new();
+        store
+            .put(
+                &KnowledgeDoc::new(
+                    "pinned-before-extraction",
+                    KnowledgeScope::repo(repo().to_string()),
+                    "Curated guidance",
+                    "Preserve the curated convention when extraction cannot run.",
+                )
+                .pinned(),
+            )
+            .await
+            .expect("seed pinned context");
+
+        let started_at = tokio::time::Instant::now();
+        let execution = crate::app::review_execution::ReviewRunContext::new(
+            crate::app::review_execution::ReviewExecutionOptions {
+                started_at,
+                hard_deadline: started_at + std::time::Duration::from_secs(100),
+                mode: crate::lanes::large_pr::ReviewMode::Large,
+                max_calls: Some(8),
+                soft_deadline_percent: 80,
+                drain_seconds: 5,
+            },
+        );
+        let bound = execution.bind_model(Arc::clone(&model), config.models.budget_usd_per_pr);
+
+        let prepared = prepare(
+            &config,
+            &repo(),
+            &["src/lib.rs".into()],
+            Some(&store as &dyn KnowledgeStore),
+        )
+        .await;
+        assert!(
+            prepared
+                .knowledge
+                .pinned
+                .contains("Preserve the curated convention when extraction cannot run.")
+        );
+        assert!(
+            prepared
+                .instruction_files
+                .contains(&"AGENTS.md".to_string())
+        );
+
+        tokio::time::advance(std::time::Duration::from_secs(80)).await;
+        let (knowledge, usage) =
+            extract_prepared(prepared, &forge, &bound.model, &config, &repo(), "headsha").await;
+
+        assert!(
+            knowledge
+                .pinned
+                .contains("Preserve the curated convention when extraction cannot run.")
+        );
+        assert!(knowledge.extracted_rules.is_empty());
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cost_usd, 0.0);
+        assert_eq!(mock.calls(), 0, "refused extraction consumes no response");
     }
 
     #[tokio::test]

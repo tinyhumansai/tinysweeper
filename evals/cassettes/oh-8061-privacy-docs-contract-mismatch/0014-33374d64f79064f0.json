@@ -1,0 +1,22 @@
+{
+  "key": "33374d64f79064f0",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4198,
+    "output_tokens": 617,
+    "reasoning_tokens": 679,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00036415
+  },
+  "value": {
+    "findings": [],
+    "summary": "The change adds a call to disclose speech transfer before the TTS request, updating comments accordingly. No concrete defect is evident in the provided diff."
+  }
+}

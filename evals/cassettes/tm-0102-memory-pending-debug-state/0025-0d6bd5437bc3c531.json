@@ -1,0 +1,21 @@
+{
+  "key": "0d6bd5437bc3c531",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_relocate",
+  "usage": {
+    "input_tokens": 735,
+    "output_tokens": 756,
+    "reasoning_tokens": 795,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00022575
+  },
+  "value": {
+    "existing_code": "    AuthDetection, AuthKind, DEFAULT_CLIENT_NAME, MemoryPendingStore, OAuthBundle,\n    OAuthCredentialStore, OAuthFlow, PENDING_TTL_SECS, PendingAuthorization,\n    PendingAuthorizationStore,"
+  }
+}

@@ -10,6 +10,12 @@
 
 version = 1
 
+[server]
+# Operator-owned concurrency pools. Repository config overlays do not control
+# these deployment-wide limits.
+review_concurrency = 4
+triage_concurrency = 2
+
 [review]
 # `e2e` is opt-in: list it here (or use the `e2e-required` preset) to turn it
 # on. It was on by default and, wherever a harness existed, asked for an
@@ -57,11 +63,10 @@ note_confidence = 0.65
 incremental = true
 draft_prs = false
 respect_agents_md = true
-# Maximum adaptive review depth over the same evidence. Small groups stop
-# after round one. Qualifying groups may take up to two more looks, stopping
-# as soon as a pass adds no distinct surviving finding. Each extra pass is
-# another model call, so this remains an operator-owned ceiling.
-passes = 3
+# Maximum review passes over the same evidence. Pass one always runs; later
+# passes run only when the previous pass proposed a candidate or the group has
+# a deterministic high-risk signal. Each extra pass is another model call.
+passes = 2
 
 # Block the merge button at this severity; "off" never blocks. A blocking review
 # has to be cleared by a human if it turns out to be wrong, so the floor sits at
@@ -75,6 +80,19 @@ request_changes_at = "high"
 # previous objection standing after the fix. One approval per clean head — a
 # second is not submitted while the first still stands.
 approve_when_clean = true
+
+# Large pull requests get a bounded, risk-ranked review plan. These ceilings
+# belong to the operator and are deliberately absent from the remote-config
+# allow-list.
+[review.large_pr]
+enabled = true
+files = 30
+changed_lines = 2000
+groups = 24
+max_groups = 12
+max_calls = 48
+soft_deadline_percent = 80
+drain_seconds = 30
 
 # The change-map comment: one diagram of what the pull request touches and what
 # it reaches, edited in place on every push. On by default, which is safe in a
@@ -319,6 +337,12 @@ max_tokens = 16000
 # cheap tier cost more than the expensive one, which is the entire reason the
 # tier exists. `tinysweeper doctor` warns when the two are configured together.
 reasoning_effort = "medium"
+# Per-role settings keep reviewer judgment at medium effort while the factual
+# falsifier and narrative summary use less reasoning. Setting the global value
+# to `off` remains a kill switch for every role.
+reviewer_reasoning_effort = "medium"
+falsify_reasoning_effort = "low"
+summary_reasoning_effort = "low"
 # Who enforces the response schema, and the reason the model above is usable at
 # all.
 #

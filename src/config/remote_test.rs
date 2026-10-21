@@ -172,6 +172,41 @@ fn a_repository_cannot_repartition_the_shared_index() {
 }
 
 #[test]
+fn a_repository_cannot_set_model_reasoning_effort() {
+    // Role effort changes the operator's model spend, so the reviewed repo's
+    // base-branch config cannot choose it for the deployment.
+    let (config, ignored) = applied(
+        r#"
+        [models]
+        reviewer_reasoning_effort = "high"
+        falsify_reasoning_effort = "off"
+        summary_reasoning_effort = "high"
+        "#,
+    );
+
+    assert_eq!(
+        config.models.reviewer_reasoning_effort,
+        base().models.reviewer_reasoning_effort
+    );
+    assert_eq!(
+        config.models.falsify_reasoning_effort,
+        base().models.falsify_reasoning_effort
+    );
+    assert_eq!(
+        config.models.summary_reasoning_effort,
+        base().models.summary_reasoning_effort
+    );
+    assert_eq!(
+        ignored,
+        vec![
+            "models.falsify_reasoning_effort".to_string(),
+            "models.reviewer_reasoning_effort".to_string(),
+            "models.summary_reasoning_effort".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn a_repository_cannot_turn_on_the_thing_that_presses_merge() {
     // Auto-merge is a write action against the operator's installation. A
     // repository that could enable it from a branch could merge that branch.
@@ -253,6 +288,37 @@ fn a_repository_cannot_raise_the_review_size_limits() {
         vec![
             "review.max_changed_files".to_string(),
             "review.max_changed_lines".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_repository_cannot_override_large_review_budgets_or_deadlines() {
+    let (config, ignored) = applied(
+        "[review.large_pr]\nenabled = false\nfiles = 1\nchanged_lines = 1\n\
+         groups = 1\nmax_groups = 1000\nmax_calls = 1000\n\
+         soft_deadline_percent = 95\ndrain_seconds = 3600\n",
+    );
+
+    assert!(config.review.large_pr.enabled);
+    assert_eq!(config.review.large_pr.files, 30);
+    assert_eq!(config.review.large_pr.changed_lines, 2_000);
+    assert_eq!(config.review.large_pr.groups, 24);
+    assert_eq!(config.review.large_pr.max_groups, 12);
+    assert_eq!(config.review.large_pr.max_calls, 48);
+    assert_eq!(config.review.large_pr.soft_deadline_percent, 80);
+    assert_eq!(config.review.large_pr.drain_seconds, 30);
+    assert_eq!(
+        ignored,
+        vec![
+            "review.large_pr.changed_lines".to_string(),
+            "review.large_pr.drain_seconds".to_string(),
+            "review.large_pr.enabled".to_string(),
+            "review.large_pr.files".to_string(),
+            "review.large_pr.groups".to_string(),
+            "review.large_pr.max_calls".to_string(),
+            "review.large_pr.max_groups".to_string(),
+            "review.large_pr.soft_deadline_percent".to_string(),
         ]
     );
 }
@@ -652,6 +718,37 @@ async fn a_fetched_config_is_filtered_exactly_as_a_parsed_one_is() {
     assert_eq!(overlaid.config.review.strictness, 1);
     assert!(!overlaid.config.automerge.enabled);
     assert_eq!(overlaid.ignored, vec!["automerge.enabled".to_string()]);
+}
+
+#[tokio::test]
+async fn a_repository_cannot_change_the_operators_global_worker_pools() {
+    let forge = forge_with(
+        "basesha",
+        ".tinysweeper.toml",
+        "[server]\nreview_concurrency = 100\ntriage_concurrency = 0\n",
+    );
+    let deployment = base();
+
+    let overlaid = overlay(&forge, &repo(), "basesha", &deployment).await;
+
+    assert_eq!(
+        overlaid.config.server.review_concurrency,
+        deployment.server.review_concurrency
+    );
+    assert_eq!(
+        overlaid.config.server.triage_concurrency,
+        deployment.server.triage_concurrency
+    );
+    assert!(
+        overlaid
+            .ignored
+            .contains(&"server.review_concurrency".to_string())
+    );
+    assert!(
+        overlaid
+            .ignored
+            .contains(&"server.triage_concurrency".to_string())
+    );
 }
 
 #[test]

@@ -1,0 +1,21 @@
+{
+  "key": "3f3e065dde425c26",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_relocate",
+  "usage": {
+    "input_tokens": 949,
+    "output_tokens": 575,
+    "reasoning_tokens": 652,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001912
+  },
+  "value": {
+    "existing_code": "        let endpoint: String = endpoint.into();\n            endpoint: endpoint.clone(),"
+  }
+}

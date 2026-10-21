@@ -1,0 +1,32 @@
+{
+  "key": "65d7974e9270db99",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4529,
+    "output_tokens": 203,
+    "reasoning_tokens": 112,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0002772
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "glob": "",
+        "kind": "search",
+        "path": "",
+        "pattern": "fn disclose_speech_transfer",
+        "why": "Determine the signature and expectations of disclose_speech_transfer"
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `disclose_speech_transfer` to verify correct arguments and behavior."
+  }
+}

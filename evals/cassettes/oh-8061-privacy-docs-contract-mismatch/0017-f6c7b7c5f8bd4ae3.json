@@ -1,0 +1,46 @@
+{
+  "key": "f6c7b7c5f8bd4ae3",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10328,
+    "output_tokens": 1128,
+    "reasoning_tokens": 1027,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0007984
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 200,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "start": 1,
+        "why": "Inspect the definition of `enforce_egress` to see its error messages and privacy-mode handling."
+      },
+      {
+        "end": 400,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "start": 200,
+        "why": "Inspect the definition of `EgressDescriptor::new` to confirm its parameters and how it sanitizes the service URL."
+      },
+      {
+        "end": 500,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "start": 400,
+        "why": "Inspect the definition of `EgressDescriptor::network_fetch` to see what fields it sets for sentinel descriptors."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to verify the contracts of `enforce_egress`, `EgressDescriptor::new`, and `EgressDescriptor::network_fetch` to ensure the new function and tests behave as expected."
+  }
+}

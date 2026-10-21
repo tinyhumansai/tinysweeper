@@ -229,7 +229,13 @@ async fn full_review(
         .await
         // Whatever went wrong here is GitHub or the deployment, not the
         // request: the request was already accepted by the two checks above.
-        .map_err(|err| ApiError(StatusCode::BAD_GATEWAY, err.to_string()))?;
+        .map_err(|err| match err {
+            crate::error::Error::ReviewCapacityFull => ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "review capacity is full; retry the manual request".into(),
+            ),
+            other => ApiError(StatusCode::BAD_GATEWAY, other.to_string()),
+        })?;
 
     // Logged deliberately. A manual review is an operator action that costs
     // money and posts comments, so it should be reconstructable from the logs.

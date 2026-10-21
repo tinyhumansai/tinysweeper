@@ -1205,7 +1205,9 @@ fn safe_relative(path: &str) -> bool {
         && !path.starts_with('/')
         && !path.contains("..")
         && !path.contains('\\')
-        && !path.starts_with(".git/")
+        && !path
+            .split('/')
+            .any(|component| component.eq_ignore_ascii_case(".git"))
 }
 
 #[async_trait]
@@ -2002,6 +2004,54 @@ mod tests {
             vec!["vendor/empty".to_string()],
             "the unfetched submodule must be named, not silently searched as empty"
         );
+    }
+
+    #[tokio::test]
+    async fn a_worktree_git_pointer_is_not_readable_as_repository_content() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".git"),
+            "gitdir: /private/cache/admin/sentinel\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".github"), "tracked content\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "pub fn safe() {}\n").unwrap();
+        let tree = DirTree::new(dir.path());
+
+        for path in [".git", "./.git", "src/../.git"] {
+            assert_eq!(
+                tree.lookup(&Lookup::Read {
+                    path: path.into(),
+                    start: None,
+                    end: None,
+                })
+                .await
+                .unwrap(),
+                Found::NotFound,
+                "private worktree metadata must not be exposed through `{path}`"
+            );
+        }
+        assert!(matches!(
+            tree.lookup(&Lookup::Read {
+                path: ".github".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap(),
+            Found::Text { .. }
+        ));
+        assert!(matches!(
+            tree.lookup(&Lookup::Read {
+                path: "src/lib.rs".into(),
+                start: None,
+                end: None,
+            })
+            .await
+            .unwrap(),
+            Found::Text { .. }
+        ));
     }
 
     #[tokio::test]

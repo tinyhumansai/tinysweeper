@@ -326,6 +326,36 @@ impl CaseScore {
     }
 }
 
+/// Effective case selection and cost/dispatch bounds for a run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionLimits {
+    /// Cases selected for this run, in canonical corpus order.
+    pub selected_case_ids: Vec<String>,
+    /// Run-level ceiling used to admit cases.
+    pub max_cost_usd: f64,
+    /// Cumulative physical dispatch ceiling for each selected recording case.
+    pub max_physical_calls_per_case: Option<usize>,
+    /// Whether the run records live responses or replays saved answers.
+    pub recording: bool,
+    /// Whether strict misses were allowed to fall back by call order.
+    pub loose_replay: bool,
+    /// Effective per-case model spend ceilings after applying label and run
+    /// limits. Replay runs have no provider spend ceilings here.
+    pub effective_case_budgets: Vec<EffectiveCaseBudget>,
+}
+
+/// One selected case's derived per-review spending ceiling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectiveCaseBudget {
+    /// Stable corpus case identifier.
+    pub case_id: String,
+    /// The effective recording budget, or `None` for offline replay.
+    pub budget_usd: Option<f64>,
+    /// The physical-call allowance admitted for this case. Recording reruns
+    /// can receive less than the requested ceiling after prior attempts.
+    pub max_physical_calls_per_case: Option<usize>,
+}
+
 /// Every case's result, plus the totals.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scorecard {
@@ -333,6 +363,11 @@ pub struct Scorecard {
     pub corpus_digest: String,
     /// The configuration digest the run used.
     pub config_digest: String,
+    /// The selected cases and their effective run/admission limits. `None`
+    /// means a legacy scorecard did not record these bounds and cannot be
+    /// compared safely with a bounded run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_limits: Option<ExecutionLimits>,
     /// Whether any answer was replayed by call order rather than by key.
     pub loose_replays: usize,
     /// Per case, sorted by id so two reports diff cleanly.

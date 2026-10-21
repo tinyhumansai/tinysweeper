@@ -122,6 +122,12 @@ pub struct Repository {
 pub struct PullRequestRef {
     /// Its number.
     pub number: u64,
+    /// Current state, when included by GitHub.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Whether GitHub has merged it.
+    #[serde(default)]
+    pub merged: bool,
     /// Whether it is a draft.
     #[serde(default)]
     pub draft: bool,
@@ -143,6 +149,9 @@ pub struct HeadRef {
 pub struct IssueRef {
     /// Its number.
     pub number: u64,
+    /// Current state, including for pull requests on comment events.
+    #[serde(default)]
+    pub state: Option<String>,
     /// Present when the issue is really a pull request.
     #[serde(default)]
     pub pull_request: Option<serde_json::Value>,
@@ -196,6 +205,9 @@ pub enum Action {
         author: String,
         /// The installation that can act on it.
         installation: u64,
+        /// The revision carried by a pull-request event, when available.
+        /// Comment requests have no revision and take a per-pull-request claim.
+        head_sha: Option<String>,
     },
     /// Triage this issue: label it, and consider closing it.
     ///
@@ -252,6 +264,22 @@ pub fn route(event: &str, payload: &Payload) -> Action {
         return Action::Ignore("no installation");
     };
 
+    // GitHub supplies state on pull request events and the issue-shaped object
+    // in comment events. Refuse known-closed subjects before queueing; comment
+    // payloads without state are checked against the live forge state by the
+    // worker before any review work begins.
+    if let Some(pr) = &payload.pull_request
+        && (pr.state.as_deref().is_some_and(|state| state != "open") || pr.merged)
+    {
+        return Action::Ignore("pull request is closed");
+    }
+    if let Some(issue) = &payload.issue
+        && issue.pull_request.is_some()
+        && issue.state.as_deref().is_some_and(|state| state != "open")
+    {
+        return Action::Ignore("pull request is closed");
+    }
+
     // Auto-merge is decided before the bot guard below, and deliberately.
     //
     // Every event that can make a pull request mergeable is sent by a bot: the
@@ -296,6 +324,7 @@ pub fn route(event: &str, payload: &Payload) -> Action {
                             number: pr.number,
                             author: pr.user.login.clone(),
                             installation: installation.id,
+                            head_sha: Some(pr.head.sha.clone()),
                         }
                     }
                 }
@@ -338,6 +367,7 @@ pub fn route(event: &str, payload: &Payload) -> Action {
                 number: issue.number,
                 author: asker,
                 installation: installation.id,
+                head_sha: None,
             }
         }
         "issues" => {
@@ -494,6 +524,65 @@ mod tests {
                 "user": {"login": "someone", "type": "User"}
             }
         }))
+    }
+
+    #[test]
+    fn a_review_delivery_for_a_merged_pull_request_is_ignored() {
+        let mut delivery = pr_payload("synchronize");
+        delivery.pull_request.as_mut().unwrap().state = Some("closed".into());
+        delivery.pull_request.as_mut().unwrap().merged = true;
+
+        assert_eq!(
+            route("pull_request", &delivery),
+            Action::Ignore("pull request is closed")
+        );
+    }
+
+    #[test]
+    fn a_review_delivery_for_a_closed_unmerged_pull_request_is_ignored() {
+        let mut delivery = pr_payload("synchronize");
+        delivery.pull_request.as_mut().unwrap().state = Some("closed".into());
+
+        assert_eq!(
+            route("pull_request", &delivery),
+            Action::Ignore("pull request is closed")
+        );
+    }
+
+    #[test]
+    fn a_mention_on_a_closed_pull_request_is_ignored() {
+        let delivery = payload(serde_json::json!({
+            "action": "created",
+            "repository": {"full_name": "tinyhumansai/tinysweeper"},
+            "installation": {"id": 152184043},
+            "issue": {
+                "number": 7,
+                "state": "closed",
+                "pull_request": {},
+                "user": {"login": "someone", "type": "User"}
+            },
+            "comment": {
+                "body": "@tinysweeper please review",
+                "user": {"login": "someone", "type": "User"}
+            }
+        }));
+
+        assert_eq!(
+            route("issue_comment", &delivery),
+            Action::Ignore("pull request is closed")
+        );
+    }
+
+    #[test]
+    fn a_thread_reply_on_a_merged_pull_request_is_ignored() {
+        let mut delivery = pr_payload("created");
+        delivery.pull_request.as_mut().unwrap().state = Some("closed".into());
+        delivery.pull_request.as_mut().unwrap().merged = true;
+
+        assert_eq!(
+            route("pull_request_review_comment", &delivery),
+            Action::Ignore("pull request is closed")
+        );
     }
 
     /// A `check_run` or `check_suite` delivery, sent — as the real ones always
@@ -711,6 +800,7 @@ mod tests {
                 number: 7,
                 author: "someone".into(),
                 installation: 152184043,
+                head_sha: Some("abc123".into()),
             }
         );
     }

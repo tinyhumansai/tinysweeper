@@ -1,0 +1,28 @@
+{
+  "key": "b2ef15b447e78e1b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 8049,
+    "output_tokens": 901,
+    "reasoning_tokens": 1049,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0006277
+  },
+  "value": {
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src",
+        "pattern": "fn is_persisted_document",
+        "why": "Check validation behavior"
+      }
+    ]
+  }
+}

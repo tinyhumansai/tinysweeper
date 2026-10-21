@@ -25,6 +25,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::OnceCell;
+use tracing::{Instrument, instrument::WithSubscriber};
 
 // Embed turns have deep futures; isolate them on the documented large stacks
 // rather than imposing a Tokio construction requirement on every consumer.
@@ -39,7 +40,13 @@ static WORKERS: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 static RUNTIME: OnceCell<Arc<Runtime>> = OnceCell::const_new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+pub(crate) async fn drain_worker_tasks() {
+    let barrier = WORKERS.spawn(async { tokio::task::yield_now().await });
+    let _ = barrier.await;
+}
 
 async fn shared_runtime() -> Result<Arc<Runtime>> {
     RUNTIME
@@ -93,6 +100,8 @@ impl<T> Drop for TurnGuard<T> {
 pub(crate) struct ReviewResources {
     pub(crate) model_budget: Option<ModelBudget>,
     pub(crate) lookup_budget: Arc<LookupBudget>,
+    pub(crate) dispatch_admission:
+        Option<Arc<dyn openhuman_embed::budget::PhysicalDispatchAdmission>>,
 }
 
 /// Run one bounded reviewer using only host repository tools.
@@ -119,6 +128,7 @@ pub async fn review(
         ReviewResources {
             model_budget: budget,
             lookup_budget: LookupBudget::new(policy),
+            dispatch_admission: None,
         },
         observer,
     )
@@ -139,6 +149,7 @@ pub(crate) async fn review_accounted(
     let ReviewResources {
         model_budget: budget,
         lookup_budget,
+        dispatch_admission,
     } = resources;
     if !policy.enabled || policy.rounds == 0 || policy.per_round == 0 || policy.max_chars == 0 {
         return Err(Error::Model(
@@ -209,6 +220,11 @@ pub(crate) async fn review_accounted(
     let estimate = Usage {
         input_tokens: input_bound.saturating_mul(calls),
         output_tokens: u64::from(request.max_tokens).saturating_mul(calls),
+        reasoning_tokens: 0,
+        calls_attempted: 0,
+        calls_succeeded: 0,
+        calls_refused: 0,
+        calls_errored: 0,
         cached_tokens: 0,
         embed_tokens: 0,
         cost_usd: crate::harness::pricing::completion_cost(
@@ -223,7 +239,9 @@ pub(crate) async fn review_accounted(
         call: budget.call,
     });
     let ledger = budget.as_ref().map(|budget| budget.ledger.clone());
-    let mut running = TurnGuard(WORKERS.spawn(async move {
+    let run_context_dispatch = tracing::dispatcher::get_default(Clone::clone);
+    let run_context_span = tracing::Span::current();
+    let turn_future = async move {
         let mut turn = agent
             .turn(evidence)
             .untrusted_input(true)
@@ -241,8 +259,14 @@ pub(crate) async fn review_accounted(
         if let Some(budget) = budget {
             turn = turn.budget(budget);
         }
+        if let Some(admission) = dispatch_admission {
+            turn = turn.dispatch_admission(admission);
+        }
         turn.send().await
-    }));
+    }
+    .with_subscriber(run_context_dispatch)
+    .instrument(run_context_span);
+    let mut running = TurnGuard(WORKERS.spawn(turn_future));
     let dispatch = bridge::dispatch(tree, policy, received, successful.clone(), lookup_budget);
     tokio::pin!(dispatch);
     let joined = tokio::select! {
@@ -266,6 +290,11 @@ pub(crate) async fn review_accounted(
     let usage = outcome.usage.map(|usage| Usage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        calls_attempted: 1,
+        calls_succeeded: 1,
+        calls_refused: 0,
+        calls_errored: 0,
         cached_tokens: usage.cached_input_tokens,
         embed_tokens: 0,
         cost_usd: usage

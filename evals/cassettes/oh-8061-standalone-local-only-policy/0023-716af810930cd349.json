@@ -1,0 +1,22 @@
+{
+  "key": "716af810930cd349",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4676,
+    "output_tokens": 372,
+    "reasoning_tokens": 400,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003268
+  },
+  "value": {
+    "findings": [],
+    "summary": "Need to verify other construction sites of ExternalTtsProvider that now require an endpoint argument, which may cause compilation failures."
+  }
+}

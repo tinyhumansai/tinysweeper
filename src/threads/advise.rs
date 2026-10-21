@@ -130,6 +130,7 @@ pub async fn ask(
             ],
             schema: schema(),
             schema_name: "tinysweeper_thread_resolution".into(),
+            reasoning_effort: None,
             max_tokens: config.models.max_tokens,
         })
         .await?;

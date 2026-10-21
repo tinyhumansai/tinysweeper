@@ -123,15 +123,20 @@
     "model": "deepseek/deepseek-v4-flash",
     "usage": {
       "cached_tokens": 0,
+      "calls_attempted": 1,
+      "calls_errored": 0,
+      "calls_refused": 0,
+      "calls_succeeded": 1,
       "cost_usd": 7e-6,
       "embed_tokens": 0,
       "input_tokens": 16,
-      "output_tokens": 4
+      "output_tokens": 4,
+      "reasoning_tokens": 0
     },
     "value": {
       "findings": [],
-      "summary": "Looks fine.",
-      "resolved": []
+      "resolved": [],
+      "summary": "Looks fine."
     }
   }
 }

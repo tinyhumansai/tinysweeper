@@ -1,0 +1,24 @@
+{
+  "key": "3504e3af5d939b0b",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4401,
+    "output_tokens": 424,
+    "reasoning_tokens": 472,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00032605
+  },
+  "value": {
+    "findings": [],
+    "lookups": [],
+    "resolved": [],
+    "summary": "No obvious defects found in the added function; it appears to compile and behave as described."
+  }
+}

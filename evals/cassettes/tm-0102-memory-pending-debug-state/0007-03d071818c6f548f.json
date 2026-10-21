@@ -1,0 +1,35 @@
+{
+  "key": "03d071818c6f548f",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4394,
+    "output_tokens": 283,
+    "reasoning_tokens": 158,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00029045
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "pattern": "fn pending_count",
+        "why": "Determine if pending_count is async and its return type to see if the test change matches the API."
+      },
+      {
+        "kind": "search",
+        "pattern": "struct OAuth",
+        "why": "Locate the struct implementing pending_count to understand its method signatures."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `registry.oauth().pending_count()` to verify the async change and its return type."
+  }
+}

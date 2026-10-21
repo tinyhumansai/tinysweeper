@@ -1,0 +1,22 @@
+{
+  "key": "f6c7b7c5f8bd4ae3",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10328,
+    "output_tokens": 903,
+    "reasoning_tokens": 1039,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00074215
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added code correctly validates URLs, strips private information, constructs an appropriate descriptor, and the tests confirm proper behavior without exposing secrets; no defects are apparent."
+  }
+}

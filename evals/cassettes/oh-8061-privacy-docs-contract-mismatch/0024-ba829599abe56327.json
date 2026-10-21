@@ -1,0 +1,21 @@
+{
+  "key": "ba829599abe56327",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_falsify",
+  "usage": {
+    "input_tokens": 1974,
+    "output_tokens": 547,
+    "reasoning_tokens": 500,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00023545
+  },
+  "value": {
+    "incorrect": []
+  }
+}

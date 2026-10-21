@@ -108,8 +108,12 @@ pub async fn plan(
     number: u64,
     resolved: &BTreeSet<String>,
 ) -> Result<(ThreadPlan, Spend)> {
+    use crate::error::Error;
+    use crate::ports::model_execution::ModelExecutionRefusal;
+
     let mut plan = ThreadPlan::default();
     let mut spend = Spend::default();
+    let mut advisory_stopped = false;
 
     if !config.threads.resolve_fixed {
         return Ok((plan, spend));
@@ -131,7 +135,36 @@ pub async fn plan(
                 let (Some(model), true) = (model, config.threads.ask_model) else {
                     continue;
                 };
-                let (resolve, call) = advise::ask(model, config, &thread).await?;
+                if advisory_stopped {
+                    continue;
+                }
+                let (resolve, call) = match advise::ask(model, config, &thread).await {
+                    Ok(result) => result,
+                    Err(
+                        error @ Error::ModelExecutionRefused {
+                            refusal:
+                                ModelExecutionRefusal::CallLimit
+                                | ModelExecutionRefusal::SoftDeadline
+                                | ModelExecutionRefusal::DrainDeadline,
+                            ..
+                        },
+                    ) => {
+                        // Advisory model judgments cannot invalidate deterministic
+                        // decisions already made, and later advisories share the
+                        // same exhausted run-wide boundary.
+                        if let Some(usage) = error.usage() {
+                            spend.record(
+                                config.model_for_workload(
+                                    crate::config::types::Workload::ThreadReview,
+                                ),
+                                usage,
+                            );
+                        }
+                        advisory_stopped = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 spend.merge(call);
                 if resolve {
                     plan.resolve.push(PlannedResolve {

@@ -474,6 +474,7 @@ impl<'a> Extractor<'a> {
                 ],
                 schema: extract_schema(),
                 schema_name: "tinysweeper_rule_extraction".into(),
+                reasoning_effort: None,
                 max_tokens: EXTRACT_MAX_TOKENS,
             })
             .await

@@ -1,0 +1,49 @@
+{
+  "key": "57c126d4aa3b30bf",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10284,
+    "output_tokens": 1205,
+    "reasoning_tokens": 1115,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00081545
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "pattern": "struct EgressDescriptor",
+        "why": "Confirm the signature of EgressDescriptor::new matches the arguments used."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "pattern": "fn enforce_egress",
+        "why": "Verify the signature and behavior of enforce_egress."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "pattern": "fn emit_external_transfer",
+        "why": "Check emit_external_transfer signature to ensure usage is correct."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/egress.rs",
+        "pattern": "enum DataKind",
+        "why": "Confirm DataKind enum variants for correct usage."
+      }
+    ],
+    "resolved": [],
+    "summary": "No defects identified; the added function and its tests appear consistent with the existing contracts."
+  }
+}

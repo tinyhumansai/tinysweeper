@@ -1,0 +1,21 @@
+{
+  "key": "0dd30aa3ad7824bc",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_relocate",
+  "usage": {
+    "input_tokens": 723,
+    "output_tokens": 615,
+    "reasoning_tokens": 639,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0001899
+  },
+  "value": {
+    "existing_code": "    AppliedServer, ConfigApplyReport, Connections, McpRegistry, MemoryPendingStore, OAuthFlow,\n    PENDING_TTL_SECS, PendingAuthorization, PendingAuthorizationStore, ProbeOutcome,"
+  }
+}

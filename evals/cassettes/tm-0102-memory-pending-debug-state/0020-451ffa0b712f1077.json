@@ -1,0 +1,34 @@
+{
+  "key": "451ffa0b712f1077",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 3811,
+    "output_tokens": 788,
+    "reasoning_tokens": 621,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00038755
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The diff adds `MemoryPendingStore`, `PENDING_TTL_SECS`, `PendingAuthorization`, and `PendingAuthorizationStore` to the `oauth` import list. If any of these identifiers are not exported by `crates/tinymcp/src/registry/oauth.rs`, compilation will fail, preventing the crate from building. Confirm that these symbols exist (or adjust the import) before merging.",
+        "confidence": 0.6,
+        "existing_code": "use oauth::{\n    AuthDetection, AuthKind, DEFAULT_CLIENT_NAME, MemoryPendingStore, OAuthBundle,\n    OAuthCredentialStore, OAuthFlow, PENDING_TTL_SECS, PendingAuthorization,\n    PendingAuthorizationStore,\n};",
+        "late": false,
+        "path": "crates/tinymcp/src/registry/mod.rs",
+        "rule": "unresolved-import",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Verify newly imported OAuth symbols exist"
+      }
+    ],
+    "summary": "The change adds several new symbols to the `oauth` import list. If these symbols are not defined in the `oauth` module, the crate will fail to compile, so the change must be verified for correct symbols before merging."
+  }
+}

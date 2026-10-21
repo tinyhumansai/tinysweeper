@@ -98,6 +98,7 @@ pub async fn build(inputs: &WireframeInputs<'_>, model: &dyn Model) -> Result<Wi
             messages: vec![Message::system(SYSTEM), Message::user(suffix(inputs, &ui))],
             schema: schema(),
             schema_name: "tinysweeper_wireframe".into(),
+            reasoning_effort: None,
             max_tokens: inputs.max_tokens,
         })
         .await?;

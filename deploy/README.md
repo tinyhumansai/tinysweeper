@@ -76,15 +76,28 @@ overlay reads:
 | `MONGO_ROOT_PASSWORD` | Root password for the bundled MongoDB. Required. |
 | `TINYSWEEPER_HOST_PORT` | Loopback port nginx proxies to. `8081`; the vhost hard-codes the same number. |
 | `TINYSWEEPER_IMAGE_TAG` | Image tag the box tracks. Defaults to `latest`. Set to a `sha-…` tag to pin. |
+| `TINYSWEEPER_REPOSITORY_CACHE_DIR` | Server-local Git object cache. Defaults to `/var/cache/tinysweeper/repositories`, backed by the `repository-cache` named volume. |
 | `TINYSWEEPER_ADMIN_TOKEN` | What `manual-review.yml` authenticates with. Unset means no `/admin` router. |
 | `TINYSWEEPER_PREVIEW_TOKEN` | What the UI preview action in other repositories' CI authenticates with (`templates/ui-preview/README.md`). Unset means no `/preview` routes. Pairs with `[preview] enabled` and `public_base_url` in `.tinysweeper.toml`, and optionally `models.vision`. |
 | `TINYSWEEPER_MCP_TOKEN` | Dedicated bearer for `/mcp`. Unset means the MCP router is not mounted. Keep it separate from the admin and preview credentials. |
 | `TINYSWEEPER_ALLOWED_ORG` | Organisation manual reviews are bounded to. Defaults to `tinyhumansai`. |
-| `LANGFUSE_*` | Optional tracing; see the README. |
+| `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Optional direct Langfuse export; provide all three. `LANGFUSE_ENVIRONMENT` tags traces. Alternatively set `TINYHUMANS_LANGFUSE_PROXY_URL` and `TINYHUMANS_AUTH_TOKEN` for the authenticated proxy. |
+| `SENTRY_DSN` | Optional server error reporting. Create a Sentry project for the deployed server and set its DSN here; never commit the DSN. |
 
 `.env` is the only file on the box that is not in git; `.tinysweeper.toml` is
 tracked. Back `.env` up somewhere with the same care as the App's private key,
 because it *is* the deployment.
+
+The server's bare Git object cache lives in the `repository-cache` volume and
+survives image replacement. It contains repository objects, not GitHub tokens;
+installation credentials are supplied only to individual fetch commands. Keep
+the cache path at the mounted location when overriding it in `.env`.
+
+To enable external tracing, provision a Langfuse project and put its endpoint
+and keys in `.env` (or use the authenticated proxy variables above). To enable
+Sentry reporting, provision a server project and set `SENTRY_DSN`. Restart the
+server after changing these values. Keep all DSNs and keys in `.env` or the
+operator's secret manager; the repository contains no production credentials.
 
 ## Rolling a new image
 
@@ -164,6 +177,7 @@ tsc exec mongod mongosh -u tinysweeper -p "$MONGO_ROOT_PASSWORD" --authenticatio
 together; mongod and mongot are versioned independently and must match. Take a
 snapshot of the droplet first.
 
-**Backups**: the state that matters is the two named volumes plus `.env`.
-Droplet snapshots cover all of it; for a logical backup,
+**Backups**: Mongo state is in the `mongod-data` and `mongot-data` volumes,
+and deployment credentials are in `.env`. The repository cache is disposable
+and refills from GitHub if removed. Droplet snapshots cover all of it; for a logical backup,
 `tsc exec mongod mongodump --archive -u … | gzip > backup.gz`.

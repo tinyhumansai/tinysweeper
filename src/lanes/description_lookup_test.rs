@@ -53,11 +53,13 @@ async fn unchanged_aggregate_guard_reaches_the_description_before_its_verdict() 
             extracted_rules: &[],
             reviewed_evidence: "",
             prior_findings: &[],
+            retrieval_status: crate::retrieve::RetrievalStatus::Off,
             retrieved_context: "",
             redaction_note: "",
             e2e: None,
             tree: Some(&tree),
             graph: None,
+            pass_yield_observer: None,
         })
         .await
         .unwrap();
@@ -154,11 +156,13 @@ async fn agentic_description_reads_unchanged_guard_and_keeps_true_mismatch_summa
             extracted_rules: &[],
             reviewed_evidence: "",
             prior_findings: &[],
+            retrieval_status: crate::retrieve::RetrievalStatus::Off,
             retrieved_context: "",
             redaction_note: "",
             e2e: None,
             tree: Some(&tree),
             graph: None,
+            pass_yield_observer: None,
         })
         .await
         .unwrap();

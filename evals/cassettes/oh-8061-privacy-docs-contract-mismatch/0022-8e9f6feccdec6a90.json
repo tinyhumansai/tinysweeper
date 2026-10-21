@@ -1,0 +1,22 @@
+{
+  "key": "8e9f6feccdec6a90",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 10487,
+    "output_tokens": 816,
+    "reasoning_tokens": 879,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00072835
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added disclose_speech_transfer function correctly validates URLs, strips sensitive components, and the tests exercise expected behavior without exposing issues."
+  }
+}

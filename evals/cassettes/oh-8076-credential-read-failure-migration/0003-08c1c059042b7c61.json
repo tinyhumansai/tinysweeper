@@ -1,0 +1,49 @@
+{
+  "key": "08c1c059042b7c61",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4683,
+    "output_tokens": 504,
+    "reasoning_tokens": 198,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00036015
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/secret_storage",
+        "pattern": "fn resolvable",
+        "why": "Determine the signature and behavior of `resolvable` to ensure the changed call matches its contract."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/secret_storage",
+        "pattern": "HOST_KEY_UNAVAILABLE",
+        "why": "Understand the type and meaning of `HOST_KEY_UNAVAILABLE` to see if checking `is_some()` correctly reflects a denied host key."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/secret_storage",
+        "pattern": "MASTER_KEY",
+        "why": "Confirm the semantics of `MASTER_KEY.get()` caching and its error handling."
+      },
+      {
+        "kind": "search",
+        "path": "crates/openhuman-core/src/security/secret_storage",
+        "pattern": "installed_master_key_source",
+        "why": "Verify the return type and side‑effects of `installed_master_key_source` to ensure the new conditional logic is correct."
+      }
+    ],
+    "resolved": [],
+    "summary": "Need to inspect the definition of `resolvable` to verify that the new argument ordering and added host‑key logic match its expected parameters and semantics."
+  }
+}

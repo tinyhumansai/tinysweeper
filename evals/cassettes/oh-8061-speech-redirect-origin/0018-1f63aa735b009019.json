@@ -1,0 +1,34 @@
+{
+  "key": "1f63aa735b009019",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4139,
+    "output_tokens": 1349,
+    "reasoning_tokens": 1347,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0005442
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The constructor now refers to a variable `endpoint` that is never introduced because the function signature was not updated to accept an `endpoint` argument. This results in a compilation failure, breaking the build. Add an `endpoint: impl Into<String>` parameter to `ExternalTtsProvider::new` and adjust the code accordingly.",
+        "confidence": 0.95,
+        "existing_code": "let endpoint: String = endpoint.into();\nSelf {\n    slug: slug.into(),\n    endpoint: endpoint.clone(),\n    default_voice: default_voice.into(),\n    api_style,\n    client: ExternalTtsClient::new(reqwest::Client::new(), endpoint, api_key, api_style),\n}",
+        "late": false,
+        "path": "crates/openhuman-core/src/voice/factory/tts_providers.rs",
+        "rule": "undefined-variable",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Add missing endpoint parameter to constructor"
+      }
+    ],
+    "summary": "The change introduces a compilation error: the new `endpoint` field is used in `ExternalTtsProvider::new` without adding a corresponding parameter, leaving `endpoint` undefined."
+  }
+}

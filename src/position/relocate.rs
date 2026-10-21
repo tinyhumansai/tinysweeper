@@ -54,6 +54,7 @@ pub async fn relocate(
             messages: vec![Message::system(INSTRUCTIONS), Message::user(user)],
             schema: schema(),
             schema_name: "tinysweeper_relocate".into(),
+            reasoning_effort: None,
             max_tokens: config.models.max_tokens,
         })
         .await

@@ -1,0 +1,28 @@
+# Credential-free bounded continuation candidate for the five historical
+# corpus recordings. Revalidate the public endpoint immediately before use.
+# Do not use this file to run production reviews.
+
+[models]
+gateway = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+scan = "openai/gpt-oss-120b"
+deep = "openai/gpt-oss-120b"
+flash = "openai/gpt-oss-120b"
+fallback = []
+routes = []
+max_tokens = 12000
+reasoning_effort = "low"
+reviewer_reasoning_effort = "low"
+falsify_reasoning_effort = "low"
+summary_reasoning_effort = "low"
+structured_output = "json_object"
+agentic_reviewers = false
+budget_usd_per_pr = 0.48
+budget_prices = { "openai/gpt-oss-120b" = { input = 0.05, cached = 0.05, output = 0.25 } }
+
+[models.provider]
+order = ["novita"]
+allow_fallbacks = false
+last_resort_unpinned = false
+unpinned_vendors = []

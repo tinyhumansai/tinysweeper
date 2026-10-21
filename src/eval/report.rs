@@ -52,6 +52,33 @@ pub fn compare(current: &Scorecard, baseline: &Scorecard, allow_drift: bool) -> 
                 baseline.config_digest, current.config_digest
             ));
         }
+        match (&current.execution_limits, &baseline.execution_limits) {
+            (Some(current), Some(baseline)) if current != baseline => {
+                return Comparison::Incomparable(
+                    "the execution limits changed (selected cases or admission bounds differ)"
+                        .into(),
+                );
+            }
+            (Some(_), Some(_)) => {}
+            _ => {
+                return Comparison::Incomparable(
+                    "execution limits are unknown for at least one scorecard; re-run it with the current evaluator".into(),
+                );
+            }
+        }
+        for limits in [
+            current.execution_limits.as_ref(),
+            baseline.execution_limits.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if limits.recording && !has_known_admitted_call_allowances(limits) {
+                return Comparison::Incomparable(
+                    "an admitted per-case physical-call allowance is unknown; re-run the recording with the current evaluator".into(),
+                );
+            }
+        }
     }
 
     let mut failures = Vec::new();
@@ -101,6 +128,17 @@ pub fn compare(current: &Scorecard, baseline: &Scorecard, allow_drift: bool) -> 
     }
 }
 
+fn has_known_admitted_call_allowances(limits: &super::ExecutionLimits) -> bool {
+    limits.effective_case_budgets.len() == limits.selected_case_ids.len()
+        && limits
+            .selected_case_ids
+            .iter()
+            .zip(&limits.effective_case_budgets)
+            .all(|(selected, budget)| {
+                selected == &budget.case_id && budget.max_physical_calls_per_case.is_some()
+            })
+}
+
 /// Render a scorecard as markdown, optionally against a baseline.
 ///
 /// `allow_drift` reaches `compare` verbatim so the rendered verdict never
@@ -116,6 +154,48 @@ pub fn markdown(card: &Scorecard, baseline: Option<&Scorecard>, allow_drift: boo
         card.config_digest,
         card.cases.len()
     );
+    if let Some(limits) = &card.execution_limits {
+        let _ = writeln!(
+            out,
+            "selection `{}` · run ceiling ${:.2} · physical calls/case {} · {}{}",
+            limits.selected_case_ids.join(", "),
+            limits.max_cost_usd,
+            limits
+                .max_physical_calls_per_case
+                .map(|limit| limit.to_string())
+                .unwrap_or_else(|| "unbounded".into()),
+            if limits.recording {
+                "recording"
+            } else {
+                "replay"
+            },
+            if limits.loose_replay {
+                " (loose)"
+            } else {
+                " (strict)"
+            },
+        );
+        if limits.recording {
+            let admitted = limits
+                .effective_case_budgets
+                .iter()
+                .map(|budget| {
+                    format!(
+                        "{}={}",
+                        budget.case_id,
+                        budget
+                            .max_physical_calls_per_case
+                            .map(|limit| limit.to_string())
+                            .unwrap_or_else(|| "not-admitted".into())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "admitted physical calls/case `{admitted}`");
+        }
+    } else {
+        out.push_str("execution limits unknown (legacy scorecard)\n");
+    }
     if card.loose_replays > 0 {
         // Loud, because the alternative is a table of numbers describing a
         // prompt nobody is running.

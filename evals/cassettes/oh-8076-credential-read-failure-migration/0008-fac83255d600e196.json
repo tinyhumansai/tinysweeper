@@ -1,0 +1,22 @@
+{
+  "key": "fac83255d600e196",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4455,
+    "output_tokens": 296,
+    "reasoning_tokens": 312,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00029675
+  },
+  "value": {
+    "findings": [],
+    "summary": "The added `is_persisted_document` helper safely attempts to deserialize the given bytes and returns a boolean indicating success; no concrete defect is introduced."
+  }
+}

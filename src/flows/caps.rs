@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::config::types::Models;
+use crate::config::types::{Models, ReasoningRole};
 use crate::error::{Error, Result};
 use crate::flows::panel::Call;
 use crate::ports::model::{Message, Model, ModelRequest, ModelResponse, Spend};
@@ -33,6 +33,7 @@ pub struct ModelCapability {
     model: Arc<dyn Model>,
     unscoped_model: Arc<dyn Model>,
     models: Models,
+    reviewer_role: bool,
     spend: Mutex<Spend>,
     budget_usd: f64,
 }
@@ -53,6 +54,7 @@ impl ModelCapability {
             model: scoped,
             unscoped_model: model,
             models,
+            reviewer_role: false,
             spend: Mutex::new(Spend::default()),
             budget_usd,
         }
@@ -67,6 +69,16 @@ impl ModelCapability {
             .unscoped_model
             .scoped_budget(budget_usd)
             .unwrap_or_else(|| self.unscoped_model.clone());
+        self
+    }
+
+    /// Apply the configured reviewer effort to calls through this capability.
+    ///
+    /// Only Critique and Security lane capabilities opt in. Other model
+    /// consumers leave effort unspecified so the provider adapter can apply
+    /// the global model setting.
+    pub fn with_reviewer_role(mut self) -> Self {
+        self.reviewer_role = true;
         self
     }
 
@@ -136,6 +148,7 @@ impl ModelCapability {
             return Err(Error::Budget {
                 spent,
                 limit: self.budget_usd,
+                usage: None,
             });
         }
         // A call that names no model must not silently inherit one — which
@@ -156,6 +169,11 @@ impl ModelCapability {
             ],
             schema: schema.clone(),
             schema_name: call.schema_name.clone(),
+            reasoning_effort: self.reviewer_role.then(|| {
+                self.models
+                    .role_reasoning_effort(ReasoningRole::Reviewer)
+                    .to_string()
+            }),
             max_tokens: self.models.max_tokens,
         };
         let response = match repository {
@@ -371,6 +389,7 @@ mod tests {
                 messages: vec![],
                 schema: json!({}),
                 schema_name: "test".into(),
+                reasoning_effort: None,
                 max_tokens: 1,
             })
             .await
@@ -420,7 +439,10 @@ mod tests {
     #[tokio::test]
     async fn every_call_carries_the_configured_ceiling_and_the_reviewers_turn() {
         let model = Arc::new(MockModel::always(json!({})));
-        let capability = ModelCapability::new(model.clone(), models());
+        let mut config = models();
+        config.reasoning_effort = "high".into();
+        config.reviewer_reasoning_effort = "low".into();
+        let capability = ModelCapability::new(model.clone(), config);
         capability
             .call(&call("vendor/deep"), &json!({ "type": "object" }))
             .await
@@ -431,8 +453,33 @@ mod tests {
         assert_eq!(sent.model, "vendor/deep");
         assert_eq!(sent.schema_name, "tinysweeper_test");
         assert_eq!(
+            sent.reasoning_effort, None,
+            "a generic model capability must inherit the adapter's global effort"
+        );
+        assert_eq!(
             sent.messages,
             vec![Message::system("s"), Message::user("p")]
+        );
+    }
+
+    #[tokio::test]
+    async fn reviewer_role_survives_budget_rescoping() {
+        let model = Arc::new(MockModel::always(json!({})));
+        let mut config = models();
+        config.reasoning_effort = "high".into();
+        config.reviewer_reasoning_effort = "low".into();
+        let capability = ModelCapability::new(model.clone(), config)
+            .with_reviewer_role()
+            .with_budget(0.25);
+        capability
+            .call(&call("vendor/deep"), &json!({ "type": "object" }))
+            .await
+            .expect("reviewer request succeeds");
+
+        assert_eq!(
+            model.requests()[0].reasoning_effort.as_deref(),
+            Some("low"),
+            "rescoping the shared model budget must keep the lane's role"
         );
     }
 

@@ -1,0 +1,23 @@
+{
+  "key": "06d2ac75434b0183",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4375,
+    "output_tokens": 709,
+    "reasoning_tokens": 781,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.000396
+  },
+  "value": {
+    "max_results": 20,
+    "path": "crates/tinymcp/src/registry",
+    "query": "MemoryPendingStore"
+  }
+}

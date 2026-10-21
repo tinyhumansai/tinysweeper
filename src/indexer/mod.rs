@@ -28,6 +28,8 @@ pub mod fetch;
 pub mod mock;
 #[cfg(feature = "serve")]
 pub mod mongo;
+#[cfg(feature = "serve")]
+pub mod repository_cache;
 pub mod run;
 pub mod types;
 

@@ -1,0 +1,32 @@
+{
+  "key": "eec7fdc7c8108542",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 4653,
+    "output_tokens": 577,
+    "reasoning_tokens": 524,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0003769
+  },
+  "value": {
+    "findings": [],
+    "lookups": [
+      {
+        "end": 150,
+        "kind": "read",
+        "path": "crates/openhuman-core/src/voice/factory/tts_providers.rs",
+        "start": 120,
+        "why": "Confirm the constructor signature includes the new `endpoint` parameter and that the struct fields are used correctly."
+      }
+    ],
+    "resolved": [],
+    "summary": "Unable to determine if the added `endpoint` variable is correctly introduced in the constructor signature; need to view the surrounding code to ensure the new parameter is declared and that other usages of ExternalTtsProvider are updated accordingly."
+  }
+}

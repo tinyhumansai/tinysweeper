@@ -1,0 +1,34 @@
+{
+  "key": "4ef75c4269958788",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6934,
+    "output_tokens": 1124,
+    "reasoning_tokens": 886,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.0006277
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The original implementation provided a synchronous `pending_server(&self, state: &str) -> Option<String>` method. Changing it to an `async fn` returning `Result<Option<String>>` alters the function signature and return type. Existing code that calls `flow.pending_server(state)` without `.await` and expects an `Option<String>` will now fail to compile. The same applies to `pending_count`, which was also changed from a sync `fn pending_count(&self) -> usize` to an async `fn pending_count(&self) -> Result<usize>`. These changes constitute a breaking API change and need either to retain the original sync signatures (perhaps delegating to async internally) or update all callers accordingly.",
+        "confidence": 0.9,
+        "existing_code": "pub async fn pending_server(&self, state: &str) -> Result<Option<String>> {\n        let now = super::tokens::now_unix();\n        Ok(self\n            .pending\n            .peek(state)\n            .await?\n            .filter(|parked| !parked.expired_at(now))\n            .map(|parked| parked.server_id))\n    }",
+        "late": false,
+        "path": "crates/tinymcp/src/registry/oauth/flow.rs",
+        "rule": "api-change",
+        "severity": "high",
+        "suggestion": null,
+        "title": "Sync methods changed to async break callers"
+      }
+    ],
+    "summary": "Potential API breakage: `OAuthFlow::pending_server` and `pending_count` were changed from synchronous methods to asynchronous ones, which will cause compile errors in existing callers expecting the old signatures."
+  }
+}

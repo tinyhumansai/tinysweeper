@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 use crate::evidence::diff::truncate_patch;
 use crate::forge::types::{
     ChangedFile, CheckConclusion, CheckRun, CheckStatus, Commit, FileStatus, Issue, IssueComment,
-    MAX_CHECK_IMAGES, OwnReview, PullRequest, RepoId, ReviewComment, ReviewEvent, ReviewThread,
-    ReviewVerdict, ThreadComment, TreeListing,
+    MAX_CHECK_IMAGES, OwnReview, PullRequest, PullRequestMetadata, RepoId, ReviewComment,
+    ReviewEvent, ReviewThread, ReviewVerdict, ThreadComment, TreeListing,
 };
 use crate::ports::forge::{ForgeRead, ForgeWrite};
 
@@ -194,6 +194,9 @@ fn check_payload(check: &CheckRun) -> serde_json::Value {
         "name": check.name,
         "output": { "title": check.title, "summary": summary },
     });
+    if let Some(external_id) = &check.external_id {
+        body["external_id"] = serde_json::json!(external_id);
+    }
 
     // Only when there is something to attach: an empty `images` array is
     // accepted by the API, but it is one more thing for a strict schema to
@@ -231,7 +234,12 @@ fn check_payload(check: &CheckRun) -> serde_json::Value {
                 CheckConclusion::Skipped => "skipped",
             });
         }
-        None => body["status"] = serde_json::json!("in_progress"),
+        None => {
+            body["status"] = serde_json::json!(match check.status {
+                Some(crate::forge::types::CheckRunStatus::Queued) => "queued",
+                Some(crate::forge::types::CheckRunStatus::InProgress) | None => "in_progress",
+            });
+        }
     }
 
     body
@@ -653,6 +661,27 @@ fn pull_request_from(
     }
 }
 
+/// Keep queue admission independent from approval and review-context reads.
+fn pull_request_metadata_from(
+    pr: octocrab::models::pulls::PullRequest,
+    _repo: &RepoId,
+) -> PullRequestMetadata {
+    PullRequestMetadata {
+        number: pr.number,
+        author: pr
+            .user
+            .as_ref()
+            .map(|user| user.login.clone())
+            .unwrap_or_default(),
+        head_sha: pr.head.sha,
+        open: pr
+            .state
+            .map(|state| matches!(state, octocrab::models::IssueState::Open))
+            .unwrap_or(true),
+        draft: pr.draft.unwrap_or(false),
+    }
+}
+
 /// The type names in an `/orgs/{org}/issue-types` answer.
 ///
 /// Anything that is not a list — a 404 body from a user account, an error
@@ -669,9 +698,14 @@ fn type_names_from_json(raw: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn check_run_owned_by_app(item: &serde_json::Value, expected_app_id: Option<u64>) -> bool {
+    expected_app_id.is_none_or(|app_id| item["app"]["id"].as_u64() == Some(app_id))
+}
+
 /// Read-only GitHub access.
 pub struct GitHubRead {
     client: Octocrab,
+    expected_app_id: Option<u64>,
 }
 
 impl GitHubRead {
@@ -724,6 +758,15 @@ impl GitHubRead {
     pub fn new(token: &str) -> Result<Self> {
         Ok(Self {
             client: client(token)?,
+            expected_app_id: None,
+        })
+    }
+
+    /// Build a read client that can recover only checks created by this app.
+    pub fn for_app(token: &str, app_id: u64) -> Result<Self> {
+        Ok(Self {
+            client: client(token)?,
+            expected_app_id: Some(app_id),
         })
     }
 
@@ -900,6 +943,21 @@ fn verdicts_from_page(items: &[serde_json::Value]) -> Vec<ReviewVerdict> {
 
 #[async_trait]
 impl ForgeRead for GitHubRead {
+    async fn pull_request_metadata(
+        &self,
+        repo: &RepoId,
+        number: u64,
+    ) -> Result<PullRequestMetadata> {
+        let pr = self
+            .client
+            .pulls(&repo.owner, &repo.name)
+            .get(number)
+            .await
+            .map_err(api)?;
+
+        Ok(pull_request_metadata_from(pr, repo))
+    }
+
     async fn pull_request(&self, repo: &RepoId, number: u64) -> Result<PullRequest> {
         let pr = self
             .client
@@ -1225,6 +1283,40 @@ impl ForgeRead for GitHubRead {
             "the check runs for this commit",
         )
         .await
+    }
+
+    async fn check_run_by_external_id(
+        &self,
+        repo: &RepoId,
+        sha: &str,
+        external_id: &str,
+    ) -> Result<Option<u64>> {
+        let expected_app_id = self.expected_app_id;
+        read_all_pages(
+            |page| async move {
+                let route = format!(
+                    "/repos/{}/{}/commits/{sha}/check-runs?per_page={PER_PAGE}&page={page}",
+                    repo.owner, repo.name
+                );
+                self.client.get(route, None::<&()>).await.map_err(api)
+            },
+            |raw| raw["check_runs"].as_array(),
+            |items| {
+                items
+                    .iter()
+                    .filter(|item| {
+                        item["name"].as_str() == Some(crate::forge::types::REVIEW_CHECK_NAME)
+                            && item["external_id"].as_str() == Some(external_id)
+                            && check_run_owned_by_app(item, expected_app_id)
+                    })
+                    .filter_map(|item| item["id"].as_u64())
+                    .collect::<Vec<_>>()
+            },
+            MAX_CHECK_PAGES,
+            "the check runs for this commit",
+        )
+        .await
+        .map(|pages| pages.into_iter().next())
     }
 
     async fn reviews(&self, repo: &RepoId, number: u64) -> Result<Vec<ReviewVerdict>> {
@@ -1921,6 +2013,8 @@ mod tests {
             conclusion,
             title: "t".into(),
             summary: "s".into(),
+            status: None,
+            external_id: None,
             images: vec![],
         }
     }
@@ -1932,6 +2026,31 @@ mod tests {
                 .get("images")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recovered_check_must_belong_to_the_configured_github_app() {
+        let item = json!({"app": {"id": 123}});
+        assert!(check_run_owned_by_app(&item, Some(123)));
+        assert!(!check_run_owned_by_app(&item, Some(456)));
+        assert!(check_run_owned_by_app(&item, None));
+    }
+
+    #[test]
+    fn explicit_queued_status_and_external_id_survive_wire_serialization() {
+        let mut queued = check(None);
+        queued.status = Some(crate::forge::types::CheckRunStatus::Queued);
+        queued.external_id = Some("review:job-123:head-abc".into());
+
+        let payload = check_payload(&queued);
+
+        assert_eq!(payload["status"], "queued");
+        assert_eq!(payload["external_id"], "review:job-123:head-abc");
+    }
+
+    #[test]
+    fn pending_without_explicit_status_remains_in_progress() {
+        assert_eq!(check_payload(&check(None))["status"], "in_progress");
     }
 
     #[test]

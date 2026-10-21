@@ -1,0 +1,33 @@
+{
+  "key": "f3c87aab610e5e4d",
+  "model_requested": "openai/gpt-oss-120b",
+  "model_answered": "openai/gpt-oss-120b",
+  "schema_name": "tinysweeper_critique",
+  "usage": {
+    "input_tokens": 6785,
+    "output_tokens": 1566,
+    "reasoning_tokens": 1502,
+    "calls_attempted": 1,
+    "calls_succeeded": 1,
+    "calls_refused": 0,
+    "calls_errored": 0,
+    "cached_tokens": 0,
+    "embed_tokens": 0,
+    "cost_usd": 0.00073075
+  },
+  "value": {
+    "findings": [
+      {
+        "body": "The `OAuthFlow` struct now stores the pending authorizations as `Arc<dyn PendingAuthorizationStore>`. If the `PendingAuthorizationStore` trait is not constrained to `Send + Sync`, the resulting `OAuthFlow` type may not implement `Send` or `Sync`. Code that previously moved an `OAuthFlow` into async tasks or shared it across threads (possible because the earlier `Mutex<HashMap>` was thread‑safe) will now fail to compile or could lead to undefined behavior if forced. Add `+ Send + Sync` bounds to the trait object (e.g., `Arc<dyn PendingAuthorizationStore + Send + Sync>`) or require the trait itself to be `Send + Sync`.",
+        "confidence": 0.65,
+        "existing_code": "    pending: Arc<dyn PendingAuthorizationStore>,",
+        "path": "crates/tinymcp/src/registry/oauth/flow.rs",
+        "rule": "missing-send-sync",
+        "severity": "high",
+        "suggestion": "    pending: Arc<dyn PendingAuthorizationStore + Send + Sync>,",
+        "title": "Require Send+Sync on pending store trait object"
+      }
+    ],
+    "summary": "The change introduces a thread‑safety regression: the pending store is held as an unsized `Arc<dyn PendingAuthorizationStore>` without `Send + Sync` bounds, which can make `OAuthFlow` non‑Send/Sync and break existing concurrent usage."
+  }
+}
