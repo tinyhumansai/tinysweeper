@@ -1839,6 +1839,16 @@ fn deployment_retrieval_uses_the_served_embedding_space() {
 }
 
 #[test]
+fn deployment_request_deadline_outlasts_the_deep_ladder_and_fits_inside_nginx() {
+    // Production lanes went unanswered when the two-minute default hung up on
+    // the deep ladder mid-failover; nginx in front of it gives up at 300 s.
+    let deployment: Config = toml::from_str(include_str!("../../.tinysweeper.toml")).unwrap();
+    let timeout = deployment.models.request_timeout_ms.unwrap();
+    assert!(timeout > 120_000, "{timeout}");
+    assert!(timeout < 300_000, "{timeout}");
+}
+
+#[test]
 fn physical_request_deadlines_default_to_two_minutes_and_accept_positive_overrides() {
     let default = parse("version = 1");
     assert_eq!(default.models.request_timeout_ms, Some(120_000));
