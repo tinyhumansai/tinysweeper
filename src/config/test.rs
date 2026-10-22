@@ -1839,13 +1839,27 @@ fn deployment_retrieval_uses_the_served_embedding_space() {
 }
 
 #[test]
-fn deployment_request_deadline_outlasts_the_deep_ladder_and_fits_inside_nginx() {
-    // Production lanes went unanswered when the two-minute default hung up on
-    // the deep ladder mid-failover; nginx in front of it gives up at 300 s.
-    let deployment: Config = toml::from_str(include_str!("../../.tinysweeper.toml")).unwrap();
-    let timeout = deployment.models.request_timeout_ms.unwrap();
-    assert!(timeout > 120_000, "{timeout}");
-    assert!(timeout < 300_000, "{timeout}");
+fn deployment_completions_skip_the_ladder_with_reasoning_off_everywhere() {
+    // With reasoning on, Surplus spent ~12k thinking tokens per review call
+    // (225–270 s) whatever effort was asked for, and the ladder's 120 s cut-off
+    // left lanes unanswered. Off is the only setting Surplus honours.
+    let deployment = parse(include_str!("../../.tinysweeper.toml"));
+    let models = &deployment.models;
+    assert!(!models.base_url.contains(":7443"), "{}", models.base_url);
+    assert!(models.base_url.starts_with("https://api.surplusintelligence.ai/"));
+    for effort in [
+        &models.reasoning_effort,
+        &models.reviewer_reasoning_effort,
+        &models.falsify_reasoning_effort,
+        &models.summary_reasoning_effort,
+    ] {
+        assert_eq!(effort, "off");
+    }
+    // GLM-5.3 is thinking-only on Surplus and rejects reasoning off.
+    assert!(!models.fallback.is_empty());
+    assert!(models.fallback.iter().all(|model| !model.starts_with("glm")));
+    let problems = validate::validate(&deployment);
+    assert!(problems.is_empty(), "{problems:?}");
 }
 
 #[test]
