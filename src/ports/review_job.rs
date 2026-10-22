@@ -1045,6 +1045,8 @@ impl ReviewSchedulerState {
         if running >= limit {
             return None;
         }
+        let heads = &self.incremental_heads;
+        let history = &self.head_history;
         let record = self.unfinished.iter_mut().find(|record| {
             record.not_before_ms <= now_ms
                 && (record.owner.is_none() || record.owner_until_ms <= now_ms)
@@ -1054,7 +1056,11 @@ impl ReviewSchedulerState {
                         record.review_checks.iter().any(|check| {
                             check.head_sha == head && check.published && check.check_id.is_some()
                         })
-                    }))
+                    })
+                    // The drainer withholds the queued check of a terminal
+                    // head, so waiting for it would strand the job. The worker
+                    // still confirms the live head before deciding anything.
+                    || head_is_known_terminal(heads, history, &record.request, now_ms))
         })?;
         record.generation += 1;
         record.owner = Some(owner.to_owned());
