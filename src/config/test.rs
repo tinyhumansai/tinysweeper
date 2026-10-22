@@ -1839,6 +1839,41 @@ fn deployment_retrieval_uses_the_served_embedding_space() {
 }
 
 #[test]
+fn deployment_completions_skip_the_ladder_with_reasoning_off_everywhere() {
+    // With reasoning on, Surplus spent ~12k thinking tokens per review call
+    // (225–270 s) whatever effort was asked for, and the ladder's 120 s cut-off
+    // left lanes unanswered. Off is the only setting Surplus honours.
+    let deployment = load(Path::new(env!("CARGO_MANIFEST_DIR")), None)
+        .expect("the deployment config loads")
+        .config;
+    let models = &deployment.models;
+    assert!(!models.base_url.contains(":7443"), "{}", models.base_url);
+    assert!(
+        models
+            .base_url
+            .starts_with("https://api.surplusintelligence.ai/")
+    );
+    for effort in [
+        &models.reasoning_effort,
+        &models.reviewer_reasoning_effort,
+        &models.falsify_reasoning_effort,
+        &models.summary_reasoning_effort,
+    ] {
+        assert_eq!(effort, "off");
+    }
+    // GLM-5.3 is thinking-only on Surplus and rejects reasoning off.
+    assert!(!models.fallback.is_empty());
+    assert!(
+        models
+            .fallback
+            .iter()
+            .all(|model| !model.starts_with("glm"))
+    );
+    let problems = validate::validate(&deployment);
+    assert!(problems.is_empty(), "{problems:?}");
+}
+
+#[test]
 fn physical_request_deadlines_default_to_two_minutes_and_accept_positive_overrides() {
     let default = parse("version = 1");
     assert_eq!(default.models.request_timeout_ms, Some(120_000));

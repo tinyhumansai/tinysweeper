@@ -3880,6 +3880,16 @@ impl ReviewRun<'_> {
                         .await?;
                     return Ok(InnerReview::Busy);
                 }
+                crate::ports::review_job::ReconciledReviewCheck::Terminal => {
+                    // This head already concluded under another job, and this
+                    // duplicate never published a check of its own. Any slot
+                    // left from the hint belongs to a check that reconcile
+                    // just moved to the retired outbox, so concluding it here
+                    // would be a second write. Ending with an empty slot
+                    // leaves the completed review as the newest check run.
+                    run.slot.lock().expect("status slot").take();
+                    return Ok(InnerReview::Complete(None));
+                }
                 crate::ports::review_job::ReconciledReviewCheck::OwnershipLost => {
                     return Err(Error::ReviewOwnershipLost);
                 }
@@ -6410,6 +6420,137 @@ mod tests {
         );
         assert_eq!(state.unfinished.len(), 1);
         assert_eq!(state.unfinished[0].accepted_ids.len(), 3);
+    }
+
+    /// Production, tinychannels#129: a review of a head concluded `success`, a
+    /// `pull_request edited` delivery for the same head arrived twenty minutes
+    /// later, and the queue drainer POSTed a fresh queued `tinysweeper/review`
+    /// run that the duplicate worker then concluded "Not reviewed". GitHub
+    /// shows the newest run per name, so the completed review was hidden.
+    #[tokio::test]
+    async fn a_redelivery_for_a_reviewed_head_publishes_no_check_that_hides_the_review() {
+        use crate::forge::{MockForge, RepoId, Write};
+        use crate::ports::review_job::ReconciledReviewCheck;
+
+        let store = crate::ports::review_job_mock::MockReviewJobStore::default();
+        let forge = MockForge::new();
+        let repo = RepoId::parse("owner/repo").unwrap();
+        let now = unix_time_ms();
+        let mut first = queued_test_review(129);
+        first.head_sha = Some("reviewed-head".into());
+        store.admit_batch(vec![first.clone()]).await.unwrap();
+        publish_test_queued_statuses_through_forge(&store, forge.clone(), now).await;
+
+        let owned = store
+            .claim_next("worker-first", now + 1)
+            .await
+            .unwrap()
+            .expect("the published first delivery is claimable");
+        let ReconciledReviewCheck::Ready(check) = store
+            .reconcile_live_check(&owned, "reviewed-head", now + 2)
+            .await
+            .unwrap()
+        else {
+            panic!("the first delivery's queued check was published");
+        };
+        assert_eq!(
+            store.begin_paid(&owned, now + 3).await.unwrap(),
+            PaidStart::Started
+        );
+        let open = ReviewStatus {
+            repo: repo.clone(),
+            check_id: check.check_id.expect("published check id"),
+            head_sha: "reviewed-head".into(),
+            installation: 1,
+            stage: crate::ports::review_job::ReviewCheckStage::InProgress,
+            owned: Some(owned.clone()),
+            hub_comment_id: None,
+            prior_hub_body: None,
+        };
+        let (concluded, _) = conclude_status_with_writer(
+            &open,
+            Conclusion::Reviewed {
+                findings: 0,
+                changes_requested: false,
+                coverage: status::ReviewCoverage::default(),
+            },
+            &forge,
+            || async {},
+        )
+        .await;
+        concluded.expect("the completed review concludes its check");
+        assert!(
+            record_owned_disposition(
+                &store,
+                &owned,
+                WorkerDisposition::Terminal(TerminalOutcome::Published),
+                now + 4,
+            )
+            .await
+            .expect("owned terminal disposition")
+            .expect("publication is recorded durably")
+        );
+        let reviewed_writes = forge.writes().len();
+
+        let mut edited = first.clone();
+        edited.id = crate::ports::review_job::ReviewJobId("edited-delivery".into());
+        edited.delivery = Some("edited-delivery".into());
+        edited.event = "pull_request".into();
+        edited.accepted_at_ms = now + 5;
+        assert_eq!(
+            store.admit_batch(vec![edited]).await.unwrap(),
+            Admission::Admitted
+        );
+        publish_test_queued_statuses_through_forge(&store, forge.clone(), now + 5).await;
+        let new_runs = forge.writes()[reviewed_writes..]
+            .iter()
+            .filter(|write| matches!(write, Write::Check(run) if run.head_sha == "reviewed-head"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            new_runs.is_empty(),
+            "a terminal head gets no newer check run to hide its review: {new_runs:#?}"
+        );
+
+        let duplicate = store
+            .claim_next("worker-duplicate", now + 6)
+            .await
+            .unwrap()
+            .expect("the duplicate is still claimable so it can retire");
+        assert_eq!(
+            store
+                .reconcile_live_check(&duplicate, "reviewed-head", now + 7)
+                .await
+                .unwrap(),
+            ReconciledReviewCheck::Terminal,
+            "the worker sees a terminal head with no status of its own to conclude"
+        );
+        assert!(
+            record_owned_disposition(
+                &store,
+                &duplicate,
+                WorkerDisposition::Terminal(TerminalOutcome::Declined),
+                now + 8,
+            )
+            .await
+            .expect("owned terminal disposition")
+            .expect("the duplicate is recorded")
+        );
+        publish_test_queued_statuses_through_forge(&store, forge.clone(), now + 9).await;
+        assert_eq!(
+            forge.writes().len(),
+            reviewed_writes,
+            "the duplicate writes nothing to GitHub: {:#?}",
+            &forge.writes()[reviewed_writes..]
+        );
+        let state = store.snapshot_for_test();
+        assert!(state.unfinished.is_empty());
+        assert!(state.retired_checks.is_empty());
+        assert_eq!(
+            state.incremental_heads[0].terminal_outcome,
+            Some(TerminalOutcome::Published),
+            "the duplicate's decline does not replace the publication"
+        );
     }
 
     #[tokio::test]

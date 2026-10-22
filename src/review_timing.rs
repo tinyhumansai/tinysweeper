@@ -184,12 +184,15 @@ impl ReviewTiming {
 
     /// Apply a synchronized update to the telemetry snapshot.
     pub(crate) fn record(&self, update: impl FnOnce(&mut Record)) {
-        let head_sha = {
+        // Record only a change: the fmt layer appends every `Span::record`, so
+        // re-recording on each counter update repeated the SHA per update.
+        let changed = {
             let mut record = self.0.record.lock().expect("review timing lock");
+            let before = record.head_sha.clone();
             update(&mut record);
-            record.head_sha.clone()
+            (record.head_sha != before).then(|| record.head_sha.clone())
         };
-        if !head_sha.is_empty() {
+        if let Some(head_sha) = changed.filter(|sha| !sha.is_empty()) {
             self.0.worker_span.record("head_sha", head_sha.as_str());
         }
     }
@@ -367,6 +370,43 @@ impl Drop for PhaseGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct LogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn worker_span_carries_the_head_sha_once_however_often_the_record_updates() {
+        // Production lines grew to 13 kB: every update re-recorded the SHA and
+        // the fmt layer appended another copy to the span each time.
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer_bytes = bytes.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || LogWriter(writer_bytes.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("handle_review", head_sha = tracing::field::Empty);
+            let _entered = span.enter();
+            let timing = ReviewTiming::new("owner/repo", 7, "Incremental");
+            timing.record(|record| record.head_sha = "abc123".into());
+            for _ in 0..5 {
+                timing.record(|record| record.calls_attempted += 1);
+            }
+            tracing::info!("probe");
+        });
+        let out = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let probe = out.lines().find(|line| line.contains("probe")).unwrap();
+        assert_eq!(probe.matches("head_sha=").count(), 1, "{probe}");
+    }
 
     #[test]
     fn pass_yield_keys_are_bounded_to_known_lanes_and_configured_passes() {

@@ -74,6 +74,8 @@ overlay reads:
 | Variable | Meaning |
 | --- | --- |
 | `MONGO_ROOT_PASSWORD` | Root password for the bundled MongoDB. Required. |
+| `SURPLUS_API_KEY` | Surplus key for model completions (`[models].api_key_env`). Required. |
+| `LADDER_API_KEY` | Bearer for the box's LLM ladder, used only by `[embeddings]`. |
 | `TINYSWEEPER_HOST_PORT` | Loopback port nginx proxies to. `8081`; the vhost hard-codes the same number. |
 | `TINYSWEEPER_IMAGE_TAG` | Image tag the box tracks. Defaults to `latest`. Set to a `sha-…` tag to pin. |
 | `TINYSWEEPER_REPOSITORY_CACHE_DIR` | Server-local Git object cache. Defaults to `/var/cache/tinysweeper/repositories`, backed by the `repository-cache` named volume. |

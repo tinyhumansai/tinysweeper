@@ -44,46 +44,37 @@ Flag any widening of `permissions`, any unpinned third-party action, and any
 step that interpolates untrusted context into a shell.
 """
 
-# Embed requires TLS for bearer credentials outside loopback. The private
-# nginx listener on port 7443 uses the existing server certificate; Compose
-# resolves its certificate hostname to the Docker host gateway.
-# Every model call goes through this box's LLM ladder, not to OpenRouter
-# directly. The ladder (`llm-ladder-router`, config in the workspace repo's
-# `ladder/config.toml`, installed by `ladder-up`) prices each rung against the
-# live marketplaces and dispatches to the best value under its ceilings — so
-# the discount, the failover across marketplaces, and the provider pin all
-# live there, and the names below are *ladders*, not models. The response
-# body is the upstream's, so `model` comes back as whatever answered
-# (`deepseek/deepseek-v4-flash`, `gpt-5.6-luna`) and the cost line is what the
-# marketplace charged: OpenRouter's `usage.cost` or Surplus's
-# `buyer_cost_micro`, both normalized by Embed before budget settlement.
+# Completions go straight to Surplus, not through the box's LLM ladder. The
+# ladder put a 120 s request timeout in front of a model that, measured on
+# 2026-10-22 against Surplus directly with a 7.7k-token review prompt, takes
+# 225–270 s whenever reasoning is on: deepseek-v4.1-flash thinks ~12k tokens at
+# ~53 tok/s and leaves ~25 tokens of answer. Surplus ignores the effort level
+# (`low`, `medium` and `high` all spent the same ~12k), so the only lever is
+# off, and off answers the same prompt in 3–7 s at ~$0.00005 instead of
+# ~$0.0015. Surplus reports its charge as `usage.buyer_cost_micro`, which Embed
+# settles against the budget directly.
 #
-# `deep` is the ladder that reads logic — a mechanical rename is verified
-# before the fan-out and the reviewer looks up what the changed lines call
-# into, so this tier sees only the residue. It is `gpt-5.6-luna` on Surplus,
-# measured 2026-09-15 on a 58-file pull request with two boundary
-# bugs (tinysweeper#157), luna found one of the two every run and was the only
-# model to reach the second, at a thirteenth of gpt-5.3-codex's price.
-# The review tiers use the `deep` ladder. Live 2026-10-11 comparisons on
-# identical source and PR heads completed every lane in 183–191 seconds;
-# the flash scan route left lanes unanswered after 462–491 seconds. This
-# improves completion reliability; individual false findings still occur.
-# No `fallback` here: the ladder is
-# the failover, and a model name in this list would have to be another
-# ladder. No provider pin either — that is the ladder's job now — so the
-# routing table below is empty and the unpinned last resort is off, since an
-# "unpinned" call to the ladder is the same call.
+# Every tier is one model because the cost difference between them is gone at
+# these prices. The fallback is deepseek-v4-flash (4–15 s with reasoning off);
+# GLM-5.3 cannot be a fallback, Surplus rejects it as thinking-only.
 [models]
-gateway = "ladder"
-# The ladder routes across providers with different reasoning protocols.
-# Let it choose per-route controls instead of sending OpenRouter-only fields.
-reasoning_effort = "gateway"
-base_url = "https://sweeper.tinyhumans.ai:7443/v1"
-api_key_env = "LADDER_API_KEY"
-scan = "deep"
-flash = "deep"
-deep = "deep"
-fallback = []
+gateway = "surplus"
+base_url = "https://api.surplusintelligence.ai/v1"
+api_key_env = "SURPLUS_API_KEY"
+# Reasoning off everywhere. The per-call efforts override the deployment-wide
+# one, so leaving them at their `medium`/`low` defaults would turn the 12k
+# thinking budget back on for exactly the reviewer calls this is about.
+reasoning_effort = "off"
+reviewer_reasoning_effort = "off"
+falsify_reasoning_effort = "off"
+summary_reasoning_effort = "off"
+# Healthy calls finish in seconds; a seller that stalls should cost one short
+# wait before the fallback model, not minutes.
+request_timeout_ms = 90000
+scan = "deepseek-v4.1-flash"
+flash = "deepseek-v4.1-flash"
+deep = "deepseek-v4.1-flash"
+fallback = ["deepseek-v4-flash"]
 
 [models.provider]
 order = []
@@ -91,25 +82,14 @@ allow_fallbacks = true
 last_resort_unpinned = false
 
 # Admission prices are operator-verified upper bounds in USD per million
-# tokens, covering every alias rung/seller and long-context pricing. Reverify
-# these whenever the gateway's route list or provider prices change. They do
-# not constrain provider billing; excess actual spend stops subsequent calls.
-# Verified 2026-10-10 against the mounted ladder routes and public price catalog.
-[models.budget_prices.flash]
-input = 2.5
-cached = 2.5
-output = 2.5
-
-[models.budget_prices.deep]
+# tokens. deepseek-v4.1-flash has no public price row, so it needs one here;
+# deepseek-v4-flash is priced in `harness::pricing`. They do not constrain
+# billing — Surplus's reported charge settles each call — and the bound is
+# deliberately the old `deep` alias's, well above what Surplus charged.
+[models.budget_prices."deepseek-v4.1-flash"]
 input = 0.4
 cached = 0.4
 output = 1.8
-
-# A finite output cap is required to reserve paid inference before dispatch.
-# Deep used to be uncapped; use 16k initially, with bounded retries to 64k.
-[[models.routes]]
-model = "deep"
-max_tokens = 16000
 
 # Retrieval uses the embedding route served by the production ladder.
 # `vectors-oai3` returns text-embedding-3-large at 1024 dimensions; it is a

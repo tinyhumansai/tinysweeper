@@ -210,6 +210,11 @@ pub enum ReconciledReviewCheck {
     Pending(ReviewCheckRecord),
     /// The bounded status capacity is full; defer without spending paid work.
     CapacityDeferred,
+    /// The confirmed incremental head already has a terminal result and no
+    /// queued check of this job was ever published for it. The job ends
+    /// without any status write: a new check run would become the newest
+    /// `tinysweeper/review` on the commit and hide the completed result.
+    Terminal,
     /// The caller no longer owns the durable review generation.
     OwnershipLost,
 }
@@ -427,13 +432,12 @@ impl ReviewSchedulerState {
                 };
                 job.not_before_ms <= now_ms
                     && job.review_checks.iter().any(|check| check.head_sha == head)
-                    && (job.request.mode != ReviewJobMode::Incremental
-                        || !self.incremental_heads.iter().any(|budget| {
-                            budget.repo == job.request.repo
-                                && budget.number == job.request.number
-                                && budget.head_sha == head
-                                && (budget.deadline_hit || budget.terminal_outcome.is_some())
-                        }))
+                    && !head_is_known_terminal(
+                        &self.incremental_heads,
+                        &self.head_history,
+                        &job.request,
+                        now_ms,
+                    )
             })
             .map(|(index, _, _)| self.unfinished[*index].request.id.clone())
             .collect::<Vec<_>>();
@@ -441,6 +445,18 @@ impl ReviewSchedulerState {
         for (index, _, _) in ordered {
             if claims.len() >= limit {
                 break;
+            }
+            // A redelivery for a head that already concluded must never POST
+            // a queued run: it would supersede the completed review on GitHub.
+            // `claim_next_with_limit` lets the job run unpublished instead, and
+            // `reconcile_live_check` ends it without any status write.
+            if head_is_known_terminal(
+                &self.incremental_heads,
+                &self.head_history,
+                &self.unfinished[index].request,
+                now_ms,
+            ) {
+                continue;
             }
             let Some(check_index) = self.unfinished[index]
                 .review_checks
@@ -1029,6 +1045,8 @@ impl ReviewSchedulerState {
         if running >= limit {
             return None;
         }
+        let heads = &self.incremental_heads;
+        let history = &self.head_history;
         let record = self.unfinished.iter_mut().find(|record| {
             record.not_before_ms <= now_ms
                 && (record.owner.is_none() || record.owner_until_ms <= now_ms)
@@ -1038,7 +1056,11 @@ impl ReviewSchedulerState {
                         record.review_checks.iter().any(|check| {
                             check.head_sha == head && check.published && check.check_id.is_some()
                         })
-                    }))
+                    })
+                    // The drainer withholds the queued check of a terminal
+                    // head, so waiting for it would strand the job. The worker
+                    // still confirms the live head before deciding anything.
+                    || head_is_known_terminal(heads, history, &record.request, now_ms))
         })?;
         record.generation += 1;
         record.owner = Some(owner.to_owned());
@@ -1246,6 +1268,23 @@ impl ReviewSchedulerState {
         let record = &mut self.unfinished[index];
         record.request.head_sha = Some(head_sha.to_owned());
         let detached = Self::detach_checks_except(record, Some(head_sha));
+        let terminal = head_is_known_terminal(
+            &self.incremental_heads,
+            &self.head_history,
+            &record.request,
+            now_ms,
+        );
+        let published_here = record
+            .review_checks
+            .iter()
+            .any(|check| check.head_sha == head_sha && check.published && check.check_id.is_some());
+        if terminal && !published_here {
+            // Do not mint a queued identity for a head that already concluded:
+            // publishing it would hide that result. A check this job already
+            // published is still returned as Ready so the worker concludes it.
+            self.retired_checks.extend(detached);
+            return ReconciledReviewCheck::Terminal;
+        }
         let check = if let Some(existing) = record
             .review_checks
             .iter_mut()
@@ -1606,6 +1645,36 @@ fn metadata_is_bounded(request: &ReviewRequest) -> bool {
             .as_ref()
             .is_none_or(|value| value.len() <= REVIEW_JOB_FIELD_LIMIT)
         && request.event.len() <= REVIEW_JOB_FIELD_LIMIT
+}
+
+/// Whether an incremental request's head already has a terminal result, either
+/// as the PR's current confirmed head or in recent head history.
+///
+/// Load-bearing for status publication: a queued check run for such a head
+/// would become the newest `tinysweeper/review` run on the commit, and GitHub
+/// shows only the newest one per name, so publishing it hides the completed
+/// result behind a check that can only ever end "Not reviewed".
+fn head_is_known_terminal(
+    heads: &[IncrementalHeadBudget],
+    history: &[HeadTerminalTombstone],
+    request: &ReviewRequest,
+    now_ms: i64,
+) -> bool {
+    let Some(head) = request.head_sha.as_deref() else {
+        return false;
+    };
+    request.mode == ReviewJobMode::Incremental
+        && (heads.iter().any(|budget| {
+            budget.repo == request.repo
+                && budget.number == request.number
+                && budget.head_sha == head
+                && (budget.deadline_hit || budget.terminal_outcome.is_some())
+        }) || history.iter().any(|record| {
+            record.repo == request.repo
+                && record.number == request.number
+                && record.head_sha == head
+                && record.expires_at_ms > now_ms
+        }))
 }
 
 fn owns(record: &ScheduledReview, owned: &OwnedReview) -> bool {

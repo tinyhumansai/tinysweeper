@@ -702,6 +702,21 @@ fn check_run_owned_by_app(item: &serde_json::Value, expected_app_id: Option<u64>
     expected_app_id.is_none_or(|app_id| item["app"]["id"].as_u64() == Some(app_id))
 }
 
+/// Whether a collaborator-permission body grants write access or above.
+///
+/// `permission` is GitHub's coarse `admin`/`write`/`read`/`none`; `maintain`
+/// folds into `write` there, so `role_name` is consulted too for the explicit
+/// role spelling. Anything unrecognised is read as no access.
+fn collaborator_grants_write(body: &serde_json::Value) -> bool {
+    let grants = |value: &serde_json::Value| {
+        matches!(
+            value.as_str(),
+            Some("admin" | "maintain" | "write" | "push")
+        )
+    };
+    grants(&body["permission"]) || grants(&body["role_name"])
+}
+
 /// Read-only GitHub access.
 pub struct GitHubRead {
     client: Octocrab,
@@ -730,19 +745,19 @@ impl GitHubRead {
     /// and that is read as "no write access" rather than an error: a missing
     /// collaborator record is conclusive, not a failure to determine one.
     pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
-        use octocrab::params::teams::Permission;
-
+        // Read the body raw: octocrab types `permission` as the teams enum
+        // (`pull`/`push`/…), but this route answers `admin`/`write`/`read`/
+        // `none`, so every write collaborator failed to parse and read as "no".
+        let route = format!(
+            "/repos/{}/{}/collaborators/{login}/permission",
+            repo.owner, repo.name
+        );
         match self
             .client
-            .repos(&repo.owner, &repo.name)
-            .get_contributor_permission(login)
-            .send()
+            .get::<serde_json::Value, _, _>(route, None::<&()>)
             .await
         {
-            Ok(found) => Ok(matches!(
-                found.permission,
-                Permission::Push | Permission::Maintain | Permission::Admin
-            )),
+            Ok(found) => Ok(collaborator_grants_write(&found)),
             Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
             Err(err) => {
                 // Fail closed: an error here must never be read as "so this
@@ -2005,6 +2020,20 @@ mod tests {
     use serde_json::json;
 
     use crate::forge::types::CheckImage;
+
+    #[test]
+    fn collaborator_permission_reads_githubs_admin_write_read_none_spelling() {
+        // The shapes GitHub's collaborator-permission route actually returns;
+        // `write` and `none` used to fail deserialization and read as "no".
+        let body = |permission: &str, role: &str| json!({ "permission": permission, "role_name": role, "user": { "login": "x" } });
+        assert!(collaborator_grants_write(&body("admin", "admin")));
+        assert!(collaborator_grants_write(&body("write", "write")));
+        assert!(collaborator_grants_write(&body("write", "maintain")));
+        assert!(!collaborator_grants_write(&body("read", "triage")));
+        assert!(!collaborator_grants_write(&body("read", "read")));
+        assert!(!collaborator_grants_write(&body("none", "none")));
+        assert!(!collaborator_grants_write(&json!({})));
+    }
 
     fn check(conclusion: Option<CheckConclusion>) -> CheckRun {
         CheckRun {
