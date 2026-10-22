@@ -3880,6 +3880,16 @@ impl ReviewRun<'_> {
                         .await?;
                     return Ok(InnerReview::Busy);
                 }
+                crate::ports::review_job::ReconciledReviewCheck::Terminal => {
+                    // This head already concluded under another job, and this
+                    // duplicate never published a check of its own. Any slot
+                    // left from the hint belongs to a check that reconcile
+                    // just moved to the retired outbox, so concluding it here
+                    // would be a second write. Ending with an empty slot
+                    // leaves the completed review as the newest check run.
+                    run.slot.lock().expect("status slot").take();
+                    return Ok(InnerReview::Complete(None));
+                }
                 crate::ports::review_job::ReconciledReviewCheck::OwnershipLost => {
                     return Err(Error::ReviewOwnershipLost);
                 }
