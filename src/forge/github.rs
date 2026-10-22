@@ -702,6 +702,21 @@ fn check_run_owned_by_app(item: &serde_json::Value, expected_app_id: Option<u64>
     expected_app_id.is_none_or(|app_id| item["app"]["id"].as_u64() == Some(app_id))
 }
 
+/// Whether a collaborator-permission body grants write access or above.
+///
+/// `permission` is GitHub's coarse `admin`/`write`/`read`/`none`; `maintain`
+/// folds into `write` there, so `role_name` is consulted too for the explicit
+/// role spelling. Anything unrecognised is read as no access.
+fn collaborator_grants_write(body: &serde_json::Value) -> bool {
+    let grants = |value: &serde_json::Value| {
+        matches!(
+            value.as_str(),
+            Some("admin" | "maintain" | "write" | "push")
+        )
+    };
+    grants(&body["permission"]) || grants(&body["role_name"])
+}
+
 /// Read-only GitHub access.
 pub struct GitHubRead {
     client: Octocrab,
