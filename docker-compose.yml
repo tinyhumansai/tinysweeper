@@ -124,8 +124,10 @@ services:
       # needs. The others are forwarded for a deployment that overrides
       # `embeddings.provider`.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      # The bearer the box's LLM ladder expects; `[models].api_key_env` names
-      # it. Embeddings still go to OpenRouter directly on the key above.
+      # Completions go to Surplus directly; `[models].api_key_env` names this.
+      SURPLUS_API_KEY: ${SURPLUS_API_KEY:-}
+      # The bearer the box's LLM ladder expects. Only `[embeddings]` still
+      # uses the ladder, so the index partition key does not change.
       LADDER_API_KEY: ${LADDER_API_KEY:-}
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
