@@ -2006,6 +2006,22 @@ mod tests {
 
     use crate::forge::types::CheckImage;
 
+    #[test]
+    fn collaborator_permission_reads_githubs_admin_write_read_none_spelling() {
+        // The shapes GitHub's collaborator-permission route actually returns;
+        // `write` and `none` used to fail deserialization and read as "no".
+        let body = |permission: &str, role: &str| {
+            json!({ "permission": permission, "role_name": role, "user": { "login": "x" } })
+        };
+        assert!(collaborator_grants_write(&body("admin", "admin")));
+        assert!(collaborator_grants_write(&body("write", "write")));
+        assert!(collaborator_grants_write(&body("write", "maintain")));
+        assert!(!collaborator_grants_write(&body("read", "triage")));
+        assert!(!collaborator_grants_write(&body("read", "read")));
+        assert!(!collaborator_grants_write(&body("none", "none")));
+        assert!(!collaborator_grants_write(&json!({})));
+    }
+
     fn check(conclusion: Option<CheckConclusion>) -> CheckRun {
         CheckRun {
             name: "tinysweeper/review".into(),
