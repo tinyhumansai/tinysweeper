@@ -1613,6 +1613,36 @@ fn metadata_is_bounded(request: &ReviewRequest) -> bool {
         && request.event.len() <= REVIEW_JOB_FIELD_LIMIT
 }
 
+/// Whether an incremental request's head already has a terminal result, either
+/// as the PR's current confirmed head or in recent head history.
+///
+/// Load-bearing for status publication: a queued check run for such a head
+/// would become the newest `tinysweeper/review` run on the commit, and GitHub
+/// shows only the newest one per name, so publishing it hides the completed
+/// result behind a check that can only ever end "Not reviewed".
+fn head_is_known_terminal(
+    heads: &[IncrementalHeadBudget],
+    history: &[HeadTerminalTombstone],
+    request: &ReviewRequest,
+    now_ms: i64,
+) -> bool {
+    let Some(head) = request.head_sha.as_deref() else {
+        return false;
+    };
+    request.mode == ReviewJobMode::Incremental
+        && (heads.iter().any(|budget| {
+            budget.repo == request.repo
+                && budget.number == request.number
+                && budget.head_sha == head
+                && (budget.deadline_hit || budget.terminal_outcome.is_some())
+        }) || history.iter().any(|record| {
+            record.repo == request.repo
+                && record.number == request.number
+                && record.head_sha == head
+                && record.expires_at_ms > now_ms
+        }))
+}
+
 fn owns(record: &ScheduledReview, owned: &OwnedReview) -> bool {
     record.request.id == owned.request.id
         && record.owner.as_deref() == Some(owned.owner.as_str())
