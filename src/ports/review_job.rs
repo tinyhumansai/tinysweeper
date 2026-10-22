@@ -1268,6 +1268,23 @@ impl ReviewSchedulerState {
         let record = &mut self.unfinished[index];
         record.request.head_sha = Some(head_sha.to_owned());
         let detached = Self::detach_checks_except(record, Some(head_sha));
+        let terminal = head_is_known_terminal(
+            &self.incremental_heads,
+            &self.head_history,
+            &record.request,
+            now_ms,
+        );
+        let published_here = record
+            .review_checks
+            .iter()
+            .any(|check| check.head_sha == head_sha && check.published && check.check_id.is_some());
+        if terminal && !published_here {
+            // Do not mint a queued identity for a head that already concluded:
+            // publishing it would hide that result. A check this job already
+            // published is still returned as Ready so the worker concludes it.
+            self.retired_checks.extend(detached);
+            return ReconciledReviewCheck::Terminal;
+        }
         let check = if let Some(existing) = record
             .review_checks
             .iter_mut()
