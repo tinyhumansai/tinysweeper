@@ -1848,7 +1848,11 @@ fn deployment_completions_skip_the_ladder_with_reasoning_off_everywhere() {
         .config;
     let models = &deployment.models;
     assert!(!models.base_url.contains(":7443"), "{}", models.base_url);
-    assert!(models.base_url.starts_with("https://api.surplusintelligence.ai/"));
+    assert!(
+        models
+            .base_url
+            .starts_with("https://api.surplusintelligence.ai/")
+    );
     for effort in [
         &models.reasoning_effort,
         &models.reviewer_reasoning_effort,
@@ -1859,7 +1863,12 @@ fn deployment_completions_skip_the_ladder_with_reasoning_off_everywhere() {
     }
     // GLM-5.3 is thinking-only on Surplus and rejects reasoning off.
     assert!(!models.fallback.is_empty());
-    assert!(models.fallback.iter().all(|model| !model.starts_with("glm")));
+    assert!(
+        models
+            .fallback
+            .iter()
+            .all(|model| !model.starts_with("glm"))
+    );
     let problems = validate::validate(&deployment);
     assert!(problems.is_empty(), "{problems:?}");
 }
