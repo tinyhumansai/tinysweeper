@@ -184,12 +184,15 @@ impl ReviewTiming {
 
     /// Apply a synchronized update to the telemetry snapshot.
     pub(crate) fn record(&self, update: impl FnOnce(&mut Record)) {
-        let head_sha = {
+        // Record only a change: the fmt layer appends every `Span::record`, so
+        // re-recording on each counter update repeated the SHA per update.
+        let changed = {
             let mut record = self.0.record.lock().expect("review timing lock");
+            let before = record.head_sha.clone();
             update(&mut record);
-            record.head_sha.clone()
+            (record.head_sha != before).then(|| record.head_sha.clone())
         };
-        if !head_sha.is_empty() {
+        if let Some(head_sha) = changed.filter(|sha| !sha.is_empty()) {
             self.0.worker_span.record("head_sha", head_sha.as_str());
         }
     }
