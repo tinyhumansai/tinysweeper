@@ -1843,7 +1843,9 @@ fn deployment_completions_skip_the_ladder_with_reasoning_off_everywhere() {
     // With reasoning on, Surplus spent ~12k thinking tokens per review call
     // (225–270 s) whatever effort was asked for, and the ladder's 120 s cut-off
     // left lanes unanswered. Off is the only setting Surplus honours.
-    let deployment = parse(include_str!("../../.tinysweeper.toml"));
+    let deployment = load(Path::new(env!("CARGO_MANIFEST_DIR")), None)
+        .expect("the deployment config loads")
+        .config;
     let models = &deployment.models;
     assert!(!models.base_url.contains(":7443"), "{}", models.base_url);
     assert!(models.base_url.starts_with("https://api.surplusintelligence.ai/"));
