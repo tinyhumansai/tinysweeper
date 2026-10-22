@@ -730,19 +730,19 @@ impl GitHubRead {
     /// and that is read as "no write access" rather than an error: a missing
     /// collaborator record is conclusive, not a failure to determine one.
     pub(crate) async fn has_write_access(&self, repo: &RepoId, login: &str) -> Result<bool> {
-        use octocrab::params::teams::Permission;
-
+        // Read the body raw: octocrab types `permission` as the teams enum
+        // (`pull`/`push`/…), but this route answers `admin`/`write`/`read`/
+        // `none`, so every write collaborator failed to parse and read as "no".
+        let route = format!(
+            "/repos/{}/{}/collaborators/{login}/permission",
+            repo.owner, repo.name
+        );
         match self
             .client
-            .repos(&repo.owner, &repo.name)
-            .get_contributor_permission(login)
-            .send()
+            .get::<serde_json::Value, _, _>(route, None::<&()>)
             .await
         {
-            Ok(found) => Ok(matches!(
-                found.permission,
-                Permission::Push | Permission::Maintain | Permission::Admin
-            )),
+            Ok(found) => Ok(collaborator_grants_write(&found)),
             Err(octocrab::Error::GitHub { source, .. }) if source.status_code == 404 => Ok(false),
             Err(err) => {
                 // Fail closed: an error here must never be read as "so this
