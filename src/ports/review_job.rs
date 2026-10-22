@@ -210,6 +210,11 @@ pub enum ReconciledReviewCheck {
     Pending(ReviewCheckRecord),
     /// The bounded status capacity is full; defer without spending paid work.
     CapacityDeferred,
+    /// The confirmed incremental head already has a terminal result and no
+    /// queued check of this job was ever published for it. The job ends
+    /// without any status write: a new check run would become the newest
+    /// `tinysweeper/review` on the commit and hide the completed result.
+    Terminal,
     /// The caller no longer owns the durable review generation.
     OwnershipLost,
 }
