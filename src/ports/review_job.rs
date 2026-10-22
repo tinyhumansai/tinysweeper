@@ -432,13 +432,12 @@ impl ReviewSchedulerState {
                 };
                 job.not_before_ms <= now_ms
                     && job.review_checks.iter().any(|check| check.head_sha == head)
-                    && (job.request.mode != ReviewJobMode::Incremental
-                        || !self.incremental_heads.iter().any(|budget| {
-                            budget.repo == job.request.repo
-                                && budget.number == job.request.number
-                                && budget.head_sha == head
-                                && (budget.deadline_hit || budget.terminal_outcome.is_some())
-                        }))
+                    && !head_is_known_terminal(
+                        &self.incremental_heads,
+                        &self.head_history,
+                        &job.request,
+                        now_ms,
+                    )
             })
             .map(|(index, _, _)| self.unfinished[*index].request.id.clone())
             .collect::<Vec<_>>();
@@ -446,6 +445,18 @@ impl ReviewSchedulerState {
         for (index, _, _) in ordered {
             if claims.len() >= limit {
                 break;
+            }
+            // A redelivery for a head that already concluded must never POST
+            // a queued run: it would supersede the completed review on GitHub.
+            // `claim_next_with_limit` lets the job run unpublished instead, and
+            // `reconcile_live_check` ends it without any status write.
+            if head_is_known_terminal(
+                &self.incremental_heads,
+                &self.head_history,
+                &self.unfinished[index].request,
+                now_ms,
+            ) {
+                continue;
             }
             let Some(check_index) = self.unfinished[index]
                 .review_checks
