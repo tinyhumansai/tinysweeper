@@ -80,6 +80,10 @@ gateway = "ladder"
 reasoning_effort = "gateway"
 base_url = "https://sweeper.tinyhumans.ai:7443/v1"
 api_key_env = "LADDER_API_KEY"
+# The deep ladder fails over inside one request and its slowest rung runs
+# past two minutes; 120 s cut it off mid-answer (nginx 499) and left lanes
+# unanswered. Stays under the 7443 listener's 300 s proxy_read_timeout.
+request_timeout_ms = 290000
 scan = "deep"
 flash = "deep"
 deep = "deep"
