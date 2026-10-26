@@ -560,9 +560,9 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
 ///
 /// The counterpart to `create_issue` returning duplicates: a report that
 /// matches something already tracked belongs on that issue as evidence, not
-/// as a second one. The write is claimed per repository, issue and body
-/// first, so a retry after an ambiguous response does not post the same
-/// comment twice.
+/// as a second one. The target is resolved and refused if it is a pull
+/// request, then the write is claimed per repository, issue and body, so a
+/// retry after an ambiguous response does not post the same comment twice.
 async fn comment_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
     let body = bounded_required(args, "body", MAX_ISSUE_BODY_BYTES)?;
     let number = args
@@ -570,6 +570,25 @@ async fn comment_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<
         .and_then(Value::as_u64)
         .filter(|number| *number > 0)
         .ok_or("number must be a positive issue number")?;
+
+    // GitHub shares one number space between issues and pull requests, and
+    // the issues API will comment on either. `search_issues` excludes pull
+    // requests, and a pull request's comments are the review path's, with
+    // its own markers and dedupe — a comment posted into one from here
+    // would bypass all of it. Resolved before the claim, so a rejected
+    // target leaves nothing behind, and fail-closed: a number that cannot
+    // be read is not a number to write to.
+    let token = read_token(state, repo).await?;
+    let read = crate::forge::github::GitHubRead::new(&token).map_err(|e| e.to_string())?;
+    let target = read
+        .issue(repo, number)
+        .await
+        .map_err(|e| format!("issue #{number} could not be read: {e}"))?;
+    if target.pull_request {
+        return Err(format!(
+            "#{number} is a pull request; comment_issue writes to issues only"
+        ));
+    }
 
     let installation = state
         .auth
