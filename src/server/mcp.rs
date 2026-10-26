@@ -180,7 +180,8 @@ fn tools() -> Value {
      {"name":"search_code","description":"Hybrid vector and lexical search of one indexed repository.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":4096},"limit":{"type":"integer"}}}},
      {"name":"search_issues","description":"Search one repository's open and closed issues (pull requests excluded). Read-only.","inputSchema":{"type":"object","required":["repo","query"],"properties":{"repo":{"type":"string"},"query":{"type":"string","maxLength":96},"limit":{"type":"integer"}}}},
      {"name":"read_docs","description":"Read repository documentation and issue templates from the default branch.","inputSchema":{"type":"object","required":["repo"],"properties":{"repo":{"type":"string"},"path":{"type":"string","maxLength":1024}}}},
-     {"name":"create_issue","description":"Create a title-deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string","maxLength":256},"body":{"type":"string","maxLength":65536},"template":{"type":"string","maxLength":1024,"description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":50}},"force":{"type":"boolean"}}}}
+     {"name":"create_issue","description":"Create a title-deduplicated GitHub issue enriched with vector-derived code locations and a repository Markdown issue template. Returns likely duplicates instead of writing unless force is true.","inputSchema":{"type":"object","required":["repo","title","body"],"properties":{"repo":{"type":"string"},"title":{"type":"string","maxLength":256},"body":{"type":"string","maxLength":65536},"template":{"type":"string","maxLength":1024,"description":"Optional repo-relative Markdown issue template path."},"labels":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":50}},"force":{"type":"boolean"}}}},
+     {"name":"comment_issue","description":"Add a comment to an existing GitHub issue. Deduplicated per repository, issue and body, so a retried request does not post twice. Use it to add new evidence to an issue that already tracks something rather than opening a second one.","inputSchema":{"type":"object","required":["repo","number","body"],"properties":{"repo":{"type":"string"},"number":{"type":"integer","minimum":1},"body":{"type":"string","maxLength":65536}}}}
     ]})
 }
 
@@ -220,6 +221,7 @@ async fn call(state: &McpState, params: &Value) -> Result<Value, String> {
         "search_issues" => search_issues(state, &repo, &args).await,
         "read_docs" => read_docs(state, &repo, &args).await,
         "create_issue" => create_issue(state, &repo, &args).await,
+        "comment_issue" => comment_issue(state, &repo, &args).await,
         _ => Err(format!("unknown tool `{name}`")),
     }
     .map(content)
@@ -554,6 +556,88 @@ async fn create_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<V
     Ok(json!({"created":true,"number":number,"template":template_path,"code_locations":evidence}))
 }
 
+/// Comment on an issue that already exists.
+///
+/// The counterpart to `create_issue` returning duplicates: a report that
+/// matches something already tracked belongs on that issue as evidence, not
+/// as a second one. The write is claimed per repository, issue and body
+/// first, so a retry after an ambiguous response does not post the same
+/// comment twice.
+async fn comment_issue(state: &McpState, repo: &RepoId, args: &Value) -> Result<Value, String> {
+    let body = bounded_required(args, "body", MAX_ISSUE_BODY_BYTES)?;
+    let number = args
+        .get("number")
+        .and_then(Value::as_u64)
+        .filter(|number| *number > 0)
+        .ok_or("number must be a positive issue number")?;
+
+    let installation = state
+        .auth
+        .installation_for_repo(&repo.owner, &repo.name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let plan = crate::app::apply::McpCommentPlan {
+        repo: repo.clone(),
+        installation,
+        number,
+        body: body.to_string(),
+    };
+
+    // Claimed before the request, like an issue: the claim makes a retry
+    // after a lost response safe, and a failure known to precede the write
+    // releases it below.
+    let request_key = comment_request_key(repo, number, body);
+    if !state
+        .store
+        .as_ref()
+        .ok_or("issue memory is unavailable")?
+        .claim_delivery(&request_key, "mcp-comment-issue")
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(json!({
+            "commented": false,
+            "reason": "an identical comment on this issue was already accepted recently"
+        }));
+    }
+    let id = match crate::app::apply::apply_mcp_comment(state.auth.as_ref(), &plan).await {
+        Ok(id) => id,
+        Err(crate::app::apply::McpIssueApplyError::BeforeWrite(error)) => {
+            state
+                .store
+                .as_ref()
+                .expect("the claim required a store")
+                .release_delivery(&request_key)
+                .await
+                .map_err(|release| release.to_string())?;
+            return Err(error.to_string());
+        }
+        Err(crate::app::apply::McpIssueApplyError::Ambiguous(error)) => {
+            return Err(error.to_string());
+        }
+    };
+    Ok(json!({"commented":true,"number":number,"comment_id":id}))
+}
+
+/// The claim key for a comment: the same body on the same issue is the same
+/// request, however it is spaced or cased.
+fn comment_request_key(repo: &RepoId, number: u64, body: &str) -> String {
+    let normalized = format!(
+        "{}\n{number}\n{}",
+        repo.to_string().to_ascii_lowercase(),
+        body.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    );
+    use std::fmt::Write as _;
+    let mut key = String::from("mcp-comment:");
+    for byte in Sha256::digest(normalized.as_bytes()) {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}
+
 fn issue_request_key(repo: &RepoId, title: &str) -> String {
     let normalized = format!(
         "{}\n{}",
@@ -726,8 +810,9 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         let tools = value["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
         assert!(tools.iter().any(|tool| tool["name"] == "search_issues"));
+        assert!(tools.iter().any(|tool| tool["name"] == "comment_issue"));
 
         let request = Request::post("/mcp")
             .header("content-type", "application/json")
@@ -957,6 +1042,56 @@ mod tests {
         assert!(!body.contains("name: Bug"));
         assert!(body.starts_with("## Reproduction"));
         assert!(body.contains("It loops."));
+    }
+
+    #[test]
+    fn comment_request_keys_normalize_case_and_whitespace() {
+        let first = RepoId::parse("TinyHumansAI/Teeny").unwrap();
+        let second = RepoId::parse("tinyhumansai/teeny").unwrap();
+        assert_eq!(
+            comment_request_key(&first, 42, "Also  seen on Windows"),
+            comment_request_key(&second, 42, "  also seen ON windows ")
+        );
+    }
+
+    #[test]
+    fn comment_request_keys_differ_by_issue_and_by_body() {
+        let repo = RepoId::parse("tinyhumansai/teeny").unwrap();
+        assert_ne!(
+            comment_request_key(&repo, 42, "same body"),
+            comment_request_key(&repo, 43, "same body"),
+            "the same evidence on two issues is two requests"
+        );
+        assert_ne!(
+            comment_request_key(&repo, 42, "first"),
+            comment_request_key(&repo, 42, "second"),
+            "new evidence on one issue is a new request"
+        );
+        assert_ne!(
+            comment_request_key(&repo, 42, "x"),
+            issue_request_key(&repo, "x"),
+            "a comment and an issue must not share a claim"
+        );
+    }
+
+    #[test]
+    fn comment_issue_is_advertised_with_its_schema() {
+        let tools = tools();
+        let listed = tools["tools"]
+            .as_array()
+            .expect("tools is an array")
+            .iter()
+            .find(|tool| tool["name"].as_str() == Some("comment_issue"))
+            .expect("comment_issue is advertised");
+        let required = listed["inputSchema"]["required"]
+            .as_array()
+            .expect("required is an array");
+        for field in ["repo", "number", "body"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "comment_issue must require {field}"
+            );
+        }
     }
 
     #[test]

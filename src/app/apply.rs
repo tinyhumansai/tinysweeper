@@ -110,6 +110,19 @@ pub struct McpIssuePlan {
     pub labels: Vec<String>,
 }
 
+/// A fully decided MCP comment on an existing issue.
+#[cfg(feature = "serve")]
+pub struct McpCommentPlan {
+    /// Repository already canonicalised and authorised by the planner.
+    pub repo: RepoId,
+    /// GitHub App installation covering the repository.
+    pub installation: u64,
+    /// The issue the comment belongs to.
+    pub number: u64,
+    /// Final comment body.
+    pub body: String,
+}
+
 /// Which side of the GitHub create request an MCP apply failure occurred on.
 #[cfg(feature = "serve")]
 #[derive(Debug, thiserror::Error)]
@@ -143,6 +156,33 @@ pub async fn apply_mcp_issue(
 async fn execute_mcp_issue(write: &dyn ForgeWrite, plan: &McpIssuePlan) -> Result<u64> {
     write
         .create_issue(&plan.repo, &plan.title, &plan.body, &plan.labels)
+        .await
+}
+
+/// Mint the write credential and execute one previously decided MCP comment.
+///
+/// The same two-sided error as an issue: a failure before the request is
+/// retryable, one during it may already have posted.
+#[cfg(feature = "serve")]
+pub async fn apply_mcp_comment(
+    auth: &crate::server::auth::AppAuth,
+    plan: &McpCommentPlan,
+) -> std::result::Result<u64, McpIssueApplyError> {
+    let token = auth
+        .installation_token(plan.installation)
+        .await
+        .map_err(McpIssueApplyError::BeforeWrite)?;
+    let write =
+        crate::forge::github::GitHubWrite::new(&token).map_err(McpIssueApplyError::BeforeWrite)?;
+    execute_mcp_comment(&write, plan)
+        .await
+        .map_err(McpIssueApplyError::Ambiguous)
+}
+
+#[cfg(feature = "serve")]
+async fn execute_mcp_comment(write: &dyn ForgeWrite, plan: &McpCommentPlan) -> Result<u64> {
+    write
+        .create_comment(&plan.repo, plan.number, &plan.body)
         .await
 }
 
