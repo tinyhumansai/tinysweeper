@@ -133,6 +133,11 @@ The workflow needs, on the `production` environment:
 | `DEPLOY_STACK_DIR` | variable | Defaults to `/opt/tinysweeper`. |
 | `TINYSWEEPER_SERVER_URL` | variable | `https://sweeper.tinyhumans.ai`; probed after the rollout. |
 
+After a rollout that touches the review path, run
+`scripts/verify-live.sh canary` to confirm that reviews complete and publish on
+live pull requests. It publishes check runs, so run it deliberately. See
+[`docs/modules/server/verify-live.md`](../docs/modules/server/verify-live.md).
+
 ### Changing the compose files themselves
 
 The deploy workflow pulls an *image*, not the repository. When a change to
