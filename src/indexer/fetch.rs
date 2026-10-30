@@ -1325,8 +1325,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (script, mark, helper) = git_like_script(dir.path());
         let alias = format!("alias.hang=!sh {}", script.display());
+        let args = ["-c", alias.as_str(), "hang"];
         let helper = tokio::select! {
-            result = git_stdout(dir.path(), "", &["-c", &alias, "hang"]) => {
+            result = git_stdout(dir.path(), "", &args) => {
                 panic!("the hanging alias returned: {result:?}")
             }
             pid = helper_pid(&helper) => pid,
