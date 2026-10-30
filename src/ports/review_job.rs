@@ -18,7 +18,17 @@ pub const MAX_RUNNING_REVIEWS: usize = 4;
 /// Paid recovery starts allowed for one accepted review across process restarts.
 pub const MAX_REVIEW_PAID_ATTEMPTS: u32 = 5;
 /// How long a job owner remains valid without a heartbeat.
-pub const REVIEW_OWNER_TTL_MS: i64 = 45_000;
+///
+/// Three minutes against a fifteen-second heartbeat, so a worker survives
+/// roughly 165 seconds of stall past a renewal before its local fence trips.
+/// It was 45 seconds until 2026-10-30, when a swap-thrashing shared host
+/// paused the server for up to 84 seconds at a time: about a quarter of all
+/// review runs over four days lost ownership 30-70 seconds into their lanes,
+/// before any model call, and each one spent a paid attempt. The cost of the
+/// longer lease is recovery latency after a genuine crash — a dead owner's job
+/// waits up to three minutes instead of 45 seconds before another process can
+/// claim it — which is small next to a review that can never finish.
+pub const REVIEW_OWNER_TTL_MS: i64 = 180_000;
 /// Short bounded owner claim for a queued status write, independent of review ownership.
 pub const QUEUE_STATUS_CLAIM_TTL_MS: i64 = 300_000;
 /// Bound active and detached check identities well below the BSON scheduler cap.
