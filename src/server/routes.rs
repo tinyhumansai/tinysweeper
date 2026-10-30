@@ -5588,7 +5588,14 @@ mod tests {
     #[test]
     fn a_slow_renewal_cannot_extend_the_local_deadline_from_its_response_time() {
         let response_time = tokio::time::Instant::now();
-        let renewal_started = response_time - std::time::Duration::from_secs(40);
+        // One second longer than the local fence allows, whatever the TTL is.
+        let renewal_took = std::time::Duration::from_millis(
+            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS + 1_000)
+                as u64,
+        );
+        let renewal_started = response_time
+            .checked_sub(renewal_took)
+            .expect("the test host has been up longer than one owner lease");
         assert!(
             conservative_owner_deadline(renewal_started) <= response_time,
             "a renewal response after the safety margin must not permit more model work"
