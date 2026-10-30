@@ -3,8 +3,11 @@
 #
 # Two tiers, both fanned out in parallel so a verdict arrives in minutes:
 #
-#   dry     Run a tinysweeper build's `review --propose-to` (read-only forge, no apply) against a set of live
-#           pull requests. Nothing is written to GitHub. Records per-PR wall
+#   dry     Run a tinysweeper build's `review --propose-to` against a set of
+#           live pull requests. The CLI reads through a read-only forge and
+#           never runs `apply`, so nothing is written to GitHub. It has no
+#           retrieval index, so it cannot reproduce index-dependent gating;
+#           that is canary's job. Records per-PR wall
 #           time, lane completion and finding counts, then asserts every lane
 #           completed. Run it with the baseline build and the candidate build
 #           and compare the two tables: that is the live half of a regression
