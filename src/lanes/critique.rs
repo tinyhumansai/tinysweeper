@@ -1283,7 +1283,10 @@ fn helper() {
             outcome.findings[0].confidence,
             DEGRADED_CONTEXT_CONFIDENCE_CAP
         );
-        assert!(outcome.context_degraded, "a cold index is no context at all");
+        assert!(
+            outcome.context_degraded,
+            "a cold index is no context at all"
+        );
         assert!(outcome.summary.contains("capped at Likely confidence"));
         assert!(!outcome.summary.contains("old branch is broken"));
     }
