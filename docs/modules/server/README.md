@@ -72,9 +72,9 @@ pull requests. Its final whole-batch admission is still authoritative, so a
 concurrent admission can fill the scheduler after the preflight and cause the
 manual batch to be refused without partial jobs.
 
-`[server].review_concurrency` bounds the jobs holding a durable 45-second owner
+`[server].review_concurrency` bounds the jobs holding a durable 180-second owner
 lease across the server fleet (four by default). A heartbeat extends the lease
-every 15 seconds. Generation checks fence claims, renewals, and completion;
+every 15 seconds; see [ownership under host stalls](review-queue-status.md#ownership-under-host-stalls). Generation checks fence claims, renewals, and completion;
 local expiry checks stop a paused process
 before it resumes model work, and model dispatches also verify ownership. A
 shutdown stops new claims and leaves unfinished jobs in Mongo for the next
@@ -95,8 +95,8 @@ confirms a different head; another delivery ID or webhook SHA hint cannot
 refill the budget. Delivery IDs and terminal tombstones are deduped for seven
 days, while the current head's terminal marker remains until authoritative
 head change. After the fifth start, recovery opens or resumes the status check,
-then concludes it as **Not reviewed** before recording the terminal outcome.
-No further index or model work runs for that exhausted head. Manual full
+then concludes it as **Review failed — retry budget exhausted** before
+recording the terminal outcome; an `@tinysweeper` comment re-arms it. Manual full
 reviews use a separate claim key and are not superseded by incremental
 deliveries.
 

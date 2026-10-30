@@ -67,3 +67,31 @@ When an authoritative read finds a different head, the scheduler atomically
 reserves that head's status identity and retires the superseded status. If
 status capacity is full, the review defers before paid work and retries after
 the bounded status worker drains detached records.
+
+## Ownership under host stalls
+
+A review owner holds a 180-second lease (`REVIEW_OWNER_TTL_MS`) renewed every
+15 seconds, and stops itself locally ten seconds before the lease would lapse.
+A worker therefore survives about 165 seconds of stall after a renewal. The
+lease was 45 seconds until 2026-10-30, when a swap-thrashing shared host paused
+the server for up to 84 seconds: a quarter of review runs over four days lost
+ownership before any model call. The cost is crash recovery — a dead owner's
+job waits up to three minutes before another process claims it. A renewal
+slower than five seconds is logged with its elapsed time, and a renewal that
+finds its record replaced or expired is logged with the job ID.
+
+An attempt that ends at an ownership or supersession fence before any model
+dispatch gets its paid start back (`refund_paid`). Refunds do not need live
+ownership, touch only the head that was charged, and stop after ten per head
+(`MAX_REVIEW_OWNERSHIP_REFUNDS`), so a host that never stops stalling still
+ends in an exhausted result instead of an endless job. Ordinary failures, and
+fenced attempts that already dispatched a model call, are charged as before.
+
+An exhausted head concludes its umbrella check as `ActionRequired`,
+"Review failed — retry budget exhausted", which blocks auto-merge. An
+`@tinysweeper` comment re-arms the pull request's last confirmed head when its
+terminal result is `Exhausted` or `Deadline`: the terminal mark and matching
+head history are cleared and the paid budget starts over. `Published` and
+`Declined` heads stay terminal, so a comment cannot buy a second review of a
+reviewed commit. Manual reviews are `Full` jobs with their own budget and never
+needed re-arming.
