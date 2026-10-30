@@ -128,21 +128,41 @@ run_canary() {
   pid=$(remote "docker inspect tinysweeper-tinysweeper-1 --format '{{.State.Pid}}'")
   z0=$(remote "ps -eo ppid=,stat= | awk -v p=$pid '\$1==p && \$2~/Z/' | wc -l")
   echo "canary: queueing ${#prs[@]} manual reviews on $repo via $host (zombies under server: $z0)"
-  # Heads are resolved before anything is queued, so no review is already
-  # running while the burst is still being assembled.
-  local heads=()
+  # Only open, non-draft PRs can be reviewed; a merged one is declined in a
+  # second and would read as a "Not reviewed" failure that says nothing about
+  # the server. Heads are resolved before anything is queued, so no review is
+  # already running while the burst is still being assembled.
+  local open=() heads=() state sha
   for pr in "${prs[@]}"; do
-    heads+=("$(gh pr view -R "$repo" "$pr" --json headRefOid -q .headRefOid)")
+    read -r state sha < <(gh pr view -R "$repo" "$pr" --json state,isDraft,headRefOid \
+      -q '"\(if .isDraft then "DRAFT" else .state end) \(.headRefOid)"')
+    if [ "$state" = OPEN ]; then open+=("$pr"); heads+=("$sha"); else echo "skip #$pr: $state"; fi
   done
-  # Latency is measured per PR from the moment its own request goes out,
-  # not from the end of the burst, which would understate early PRs.
+  [ ${#open[@]} -gt 0 ] || die "no open pull request in the set"
+  prs=("${open[@]}")
+
+  # The admin route admits a manual review only while a review slot is free
+  # and answers 503 otherwise, so a burst larger than `review_concurrency`
+  # is retried until the server takes it. Latency is measured per PR from
+  # the moment the server accepted it, not from the end of the burst.
+  local acks; acks=$(mktemp -d)
+  trap 'rm -rf "$acks"' RETURN
+  local deadline=$(( $(date +%s) + timeout_s ))
+  for pr in "${prs[@]}"; do
+    (
+      while :; do
+        # Token stays on the box: read from .env and fed to curl on stdin.
+        code=$(remote "port=\$(sed -n 's/^TINYSWEEPER_HOST_PORT=//p' .env); printf 'header = \"Authorization: Bearer %s\"\n' \"\$(sed -n 's/^TINYSWEEPER_ADMIN_TOKEN=//p' .env)\" | curl --config - -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:\${port:-8081}/admin/reviews/$repo -H 'Content-Type: application/json' -d '{\"number\": $pr}'" || echo 000)
+        case $code in
+          2??) date +%s >"$acks/$pr"; exit 0 ;;
+          503) [ "$(date +%s)" -lt "$deadline" ] || { echo "#$pr: still 503 at the deadline" >&2; exit 1; }
+               sleep 10 ;;
+          *) echo "#$pr: admin route answered $code" >&2; exit 1 ;;
+        esac
+      done
+    ) &
+  done
   declare -A sent_at done_at verdict
-  for pr in "${prs[@]}"; do
-    sent_at[$pr]=$(date +%s)
-    # Token stays on the box: read from .env and fed to curl on stdin.
-    remote "port=\$(sed -n 's/^TINYSWEEPER_HOST_PORT=//p' .env); printf 'header = \"Authorization: Bearer %s\"\n' \"\$(sed -n 's/^TINYSWEEPER_ADMIN_TOKEN=//p' .env)\" | curl --config - -fsS -X POST http://127.0.0.1:\${port:-8081}/admin/reviews/$repo -H 'Content-Type: application/json' -d '{\"number\": $pr}' >/dev/null" &
-  done
-  wait
   local queued_at; queued_at=$(date +%s)
 
   while :; do
@@ -150,6 +170,11 @@ run_canary() {
     for i in "${!prs[@]}"; do
       local pr=${prs[$i]} sha=${heads[$i]}
       [ -n "${done_at[$pr]:-}" ] && continue
+      # Not accepted yet (still retrying a 503): nothing to poll.
+      if [ -z "${sent_at[$pr]:-}" ]; then
+        [ -s "$acks/$pr" ] && sent_at[$pr]=$(<"$acks/$pr")
+        [ -n "${sent_at[$pr]:-}" ] || { pending=$((pending + 1)); continue; }
+      fi
       local row
       row=$(gh api "repos/$repo/commits/$sha/check-runs?check_name=tinysweeper/review&filter=latest" \
         -q '.check_runs[0] | "\(.status)\t\(.started_at)\t\(.output.title)"' 2>/dev/null || true)
@@ -187,8 +212,11 @@ run_canary() {
     esac
   done
   local p50 p95
-  p50=$(for p in "${prs[@]}"; do [ -n "${done_at[$p]:-}" ] && echo "${done_at[$p]}"; done | pct 50)
-  p95=$(for p in "${prs[@]}"; do [ -n "${done_at[$p]:-}" ] && echo "${done_at[$p]}"; done | pct 95)
+  # `if`, not `[ … ] && echo`: under `set -e` and `pipefail` a false test
+  # as the loop's last command aborted the whole run before the summary.
+  local settled; settled=$(for p in "${prs[@]}"; do if [ -n "${done_at[$p]:-}" ]; then echo "${done_at[$p]}"; fi; done)
+  p50=$(pct 50 <<<"$settled")
+  p95=$(pct 95 <<<"$settled")
   echo
   echo "enqueue→verdict p50 ${p50}s p95 ${p95}s · cancelled runs $cancelled · ownership lost $lost · git lock errors $locks · zombies $z0→$z1"
   [ "$cancelled" = 0 ] && [ "$lost" = 0 ] && [ "$locks" = 0 ] && [ "$z1" -le "$z0" ] || failed=1
