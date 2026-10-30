@@ -3755,6 +3755,39 @@ where
     continue_after_open_status(true, review).await
 }
 
+/// Run one paid attempt, returning its paid start when an ownership fence
+/// ended it before any model dispatch.
+#[allow(clippy::too_many_arguments)]
+async fn review_with_refundable_paid_budget<
+    Start,
+    StartFuture,
+    OpenStatus,
+    OpenStatusFuture,
+    Review,
+    ReviewFuture,
+>(
+    store: &dyn ReviewJobStore,
+    owned: Option<&OwnedReview>,
+    head_sha: &str,
+    now_ms: i64,
+    execution: &crate::app::review_execution::ReviewExecution,
+    timing: &crate::review_timing::ReviewTiming,
+    start: Start,
+    open_status: OpenStatus,
+    review: Review,
+) -> Result<InnerReview>
+where
+    Start: FnOnce() -> StartFuture,
+    StartFuture: std::future::Future<Output = Result<()>>,
+    OpenStatus: FnOnce() -> OpenStatusFuture,
+    OpenStatusFuture: std::future::Future<Output = Result<bool>>,
+    Review: FnOnce() -> ReviewFuture,
+    ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
+{
+    let _ = (head_sha, execution, timing);
+    review_with_paid_budget_and_status(store, owned, now_ms, start, open_status, review).await
+}
+
 fn review_lease(repo: &str, number: u64, mode: Mode, head: Option<&str>) -> String {
     let suffix = if mode == Mode::Full { "!full" } else { "" };
     match head {

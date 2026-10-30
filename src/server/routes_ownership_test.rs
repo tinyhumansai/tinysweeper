@@ -172,3 +172,159 @@ async fn a_heartbeat_that_finds_its_record_replaced_logs_the_lost_ownership() {
     assert!(line.contains("WARN"), "{line}");
     assert!(line.contains("job_id=stall-43"), "{line}");
 }
+
+fn worker_execution() -> Arc<crate::app::review_execution::ReviewExecution> {
+    let started_at = tokio::time::Instant::now();
+    let large_pr = Config::default().review.large_pr;
+    crate::app::review_execution::ReviewRunContext::new(
+        crate::app::review_execution::ReviewExecutionOptions {
+            started_at,
+            hard_deadline: started_at + REVIEW_DEADLINE,
+            mode: crate::lanes::large_pr::ReviewMode::Normal,
+            max_calls: None,
+            soft_deadline_percent: large_pr.soft_deadline_percent,
+            drain_seconds: large_pr.drain_seconds,
+        },
+    )
+    .execution()
+}
+
+/// What a lane reports when the owner fence cancels its execution scope —
+/// the "model execution refused: Cancelled" seen in production.
+fn cancelled_by_owner_fence() -> Error {
+    Error::ModelExecutionRefused {
+        refusal: crate::ports::model_execution::ModelExecutionRefusal::Cancelled,
+        usage: None,
+        accounting_complete: true,
+    }
+}
+
+/// One claimed generation of the accepted job with its head confirmed.
+async fn next_owner(store: &MockReviewJobStore, owner: &str, number: u64, now_ms: i64) -> OwnedReview {
+    acknowledge_queued_checks(store, now_ms).await;
+    let owned = store
+        .claim_next(owner, now_ms)
+        .await
+        .unwrap()
+        .expect("the lapsed job is claimable");
+    assert!(
+        store
+            .confirm_head(&owned, &format!("sha-{number}"), now_ms)
+            .await
+            .unwrap()
+    );
+    owned
+}
+
+#[tokio::test]
+async fn ownership_lost_before_any_model_call_does_not_spend_the_paid_budget() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![stalled_review(44)]).await.unwrap();
+    let mut now_ms = unix_time_ms();
+    let starts = AtomicUsize::new(0);
+    // openhuman#8425: five stalls in a row, each fenced ~55 s into the lanes
+    // with calls_attempted=0. One more than the whole budget here.
+    let stalls = crate::ports::review_job::MAX_REVIEW_PAID_ATTEMPTS + 1;
+    for generation in 0..stalls {
+        let owned = next_owner(&store, &format!("stalled-{generation}"), 44, now_ms).await;
+        let execution = worker_execution();
+        let timing = crate::review_timing::ReviewTiming::new("owner/repo", 44, "Incremental");
+        let result = review_with_refundable_paid_budget(
+            &store,
+            Some(&owned),
+            "sha-44",
+            now_ms,
+            &execution,
+            &timing,
+            || async {
+                starts.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            || async { Ok(true) },
+            || async {
+                execution.cancel();
+                Err(cancelled_by_owner_fence())
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        now_ms += crate::ports::review_job::REVIEW_OWNER_TTL_MS + 1;
+    }
+    assert_eq!(starts.load(Ordering::SeqCst), stalls as usize);
+
+    let owned = next_owner(&store, "healthy", 44, now_ms).await;
+    let execution = worker_execution();
+    let timing = crate::review_timing::ReviewTiming::new("owner/repo", 44, "Incremental");
+    let reviewed = review_with_refundable_paid_budget(
+        &store,
+        Some(&owned),
+        "sha-44",
+        now_ms,
+        &execution,
+        &timing,
+        || async { Ok(()) },
+        || async { Ok(true) },
+        || async { Ok(InnerReview::Complete(None)) },
+    )
+    .await
+    .expect("the healthy run proceeds");
+    assert!(
+        matches!(reviewed, InnerReview::Complete(_)),
+        "fenced attempts without a model call left budget for this run"
+    );
+    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+}
+
+#[tokio::test]
+async fn an_attempt_fenced_after_a_model_call_still_spends_its_paid_start() {
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![stalled_review(45)]).await.unwrap();
+    let now_ms = unix_time_ms();
+    let owned = next_owner(&store, "spent", 45, now_ms).await;
+    let execution = worker_execution();
+    let timing = crate::review_timing::ReviewTiming::new("owner/repo", 45, "Incremental");
+    let result = review_with_refundable_paid_budget(
+        &store,
+        Some(&owned),
+        "sha-45",
+        now_ms,
+        &execution,
+        &timing,
+        || async { Ok(()) },
+        || async { Ok(true) },
+        || async {
+            timing.record(|record| record.calls_attempted += 1);
+            execution.cancel();
+            Err(Error::ReviewOwnershipLost)
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(Error::ReviewOwnershipLost)));
+    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+}
+
+#[tokio::test]
+async fn an_ordinary_failure_before_any_model_call_still_spends_its_paid_start() {
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![stalled_review(46)]).await.unwrap();
+    let now_ms = unix_time_ms();
+    let owned = next_owner(&store, "failing", 46, now_ms).await;
+    let execution = worker_execution();
+    let timing = crate::review_timing::ReviewTiming::new("owner/repo", 46, "Incremental");
+    let result = review_with_refundable_paid_budget(
+        &store,
+        Some(&owned),
+        "sha-46",
+        now_ms,
+        &execution,
+        &timing,
+        || async { Ok(()) },
+        || async { Ok(true) },
+        || async { Err(Error::Forge("transient".into())) },
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+}
