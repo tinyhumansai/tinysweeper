@@ -226,7 +226,7 @@ impl Critique {
         if let Some(skipped) = prepared.skipped {
             return Ok(skipped);
         }
-        outcome.context_degraded = input.retrieval_status.lacks_context();
+        outcome.context_degraded = reviewed_without_context(&input);
         outcome.spend.merge(llm.spend());
         outcome.include_reviewed_paths(prepared.covered_without_model);
         if let Some(substitution) = &prepared.mechanical {
@@ -328,7 +328,7 @@ impl Critique {
         // rather than per file: `llm` is shared across the fan-out, so adding
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
-        outcome.context_degraded = input.retrieval_status.lacks_context();
+        outcome.context_degraded = reviewed_without_context(&input);
         outcome.include_reviewed_paths(covered_without_model);
         outcome.spend.merge(llm.spend());
         if let Some(sub) = &mechanical {
@@ -341,6 +341,23 @@ impl Critique {
         }
         Ok(outcome)
     }
+}
+
+/// Whether the reviewer saw no repository context beyond the diff.
+///
+/// [`RetrievalStatus::lacks_context`] answers that for the index itself. A
+/// `Stale` index is usually real context, but when every chunk it returned
+/// belonged to a changed file, nothing was rendered into the prompt and the
+/// review was diff-only, the same as a cold index. The gate follows what the
+/// model actually saw.
+///
+/// [`RetrievalStatus::lacks_context`]: crate::retrieve::RetrievalStatus::lacks_context
+fn reviewed_without_context(input: &LaneInput<'_>) -> bool {
+    input.retrieval_status.lacks_context()
+        || (matches!(
+            input.retrieval_status,
+            crate::retrieve::RetrievalStatus::Stale { .. }
+        ) && input.retrieved_context.trim().is_empty())
 }
 
 /// Review one group of related changed files, in a conversation that knows
@@ -721,7 +738,7 @@ async fn review_group(
     // own evidence and are outside this model-finding gate. Gated on
     // `lacks_context`, not `is_degraded`: a stale index still gave the
     // reviewer real code, and capping on it silenced nearly every review.
-    if input.retrieval_status.lacks_context() {
+    if reviewed_without_context(input) {
         capped_for_degraded_context = findings.len();
         for finding in &mut findings {
             finding.confidence = finding.confidence.min(DEGRADED_CONTEXT_CONFIDENCE_CAP);
