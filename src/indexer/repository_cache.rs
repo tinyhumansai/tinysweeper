@@ -140,6 +140,9 @@ impl RepositoryCache {
         let lock = self.lock_for(&mirror);
         let guard = lock.lock_owned().await;
         self.validate_existing_paths(repo, &mirror)?;
+        // Under the per-repository lock, so no git of this process is running
+        // in the mirror while it is swept.
+        remove_stale_git_locks(&mirror, STALE_LOCK_AGE);
         let mut missing = Vec::new();
         if !Checkout::mirror_has_revision(&mirror, revision).await? {
             missing.push(revision);
@@ -203,6 +206,69 @@ impl RepositoryCache {
         let lock = Arc::new(AsyncMutex::new(()));
         locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
         lock
+    }
+}
+
+/// How old a lockfile in a mirror must be before it is treated as debris.
+///
+/// Only this server writes the cache, every write happens under the
+/// per-repository lock, and no git invocation of ours outlives
+/// [`GIT_TIMEOUT`](crate::indexer::fetch::GIT_TIMEOUT): a lock older than
+/// that cannot belong to a live git, only to one that was killed before it
+/// could clean up. A younger lock is left alone even though it may well be
+/// debris too — stealing a live git's lock corrupts the mirror, while
+/// respecting a dead one costs one failed fetch until it ages out.
+const STALE_LOCK_AGE: std::time::Duration = crate::indexer::fetch::GIT_TIMEOUT;
+
+/// The lockfiles git takes in a bare mirror's git dir. A SIGKILLed git never
+/// removes them, and the next git to want one fails with "File exists" —
+/// `shallow.lock` wedged every fetch of one repository for two days in
+/// production.
+const MIRROR_LOCKFILES: [&str; 5] = [
+    "shallow.lock",
+    "index.lock",
+    "packed-refs.lock",
+    "config.lock",
+    "HEAD.lock",
+];
+
+/// Remove every [`MIRROR_LOCKFILES`] entry in `git_dir` older than `max_age`.
+///
+/// Best effort: a lock that cannot be inspected or removed is left for git to
+/// report, which it does with a clearer message than this could.
+fn remove_stale_git_locks(git_dir: &Path, max_age: std::time::Duration) {
+    for name in MIRROR_LOCKFILES {
+        let path = git_dir.join(name);
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        // A lock git made is a regular file; anything else was not ours.
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(age) = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+        else {
+            continue;
+        };
+        if age <= max_age {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::warn!(
+                path = %path.display(),
+                age_secs = age.as_secs(),
+                "removed a stale git lockfile from the repository cache"
+            ),
+            Err(err) => tracing::warn!(
+                path = %path.display(),
+                age_secs = age.as_secs(),
+                %err,
+                "could not remove a stale git lockfile from the repository cache"
+            ),
+        }
     }
 }
 
@@ -573,15 +639,6 @@ mod tests {
         revision
     }
 
-    /// The lockfiles a killed Git can leave in a bare mirror.
-    const MIRROR_LOCKS: [&str; 5] = [
-        "shallow.lock",
-        "index.lock",
-        "packed-refs.lock",
-        "config.lock",
-        "HEAD.lock",
-    ];
-
     fn write_lock(path: &Path, age: std::time::Duration) {
         std::fs::write(path, "").unwrap();
         std::fs::File::options()
@@ -619,7 +676,7 @@ mod tests {
         // A minute past the timeout: well beyond the few seconds of
         // termination grace a timed-out git is given on top of it.
         let stale = crate::indexer::fetch::GIT_TIMEOUT + std::time::Duration::from_secs(60);
-        for lock in MIRROR_LOCKS {
+        for lock in MIRROR_LOCKFILES {
             write_lock(&mirror.join(lock), stale);
         }
 
@@ -638,7 +695,7 @@ mod tests {
             std::fs::read(checkout.path().join("README.md")).unwrap(),
             b"new fixture head\n"
         );
-        for lock in MIRROR_LOCKS {
+        for lock in MIRROR_LOCKFILES {
             assert!(!mirror.join(lock).exists(), "{lock} should have been removed");
         }
     }
