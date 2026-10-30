@@ -131,6 +131,7 @@ fn title_for(err: &Error) -> &'static str {
         Error::Timeout { .. } => "The review ran out of time",
         Error::ReviewLimit { .. } => "The pull request is too large to review safely",
         Error::ReviewExecutionUnavailable => "The review cannot enforce its large-review limits",
+        Error::ReviewAttemptsExhausted { .. } => "Review failed — retry budget exhausted",
         Error::Config(_) | Error::ConfigNotFound(_) => "The review is misconfigured",
         _ => "The review could not run",
     }
@@ -177,6 +178,12 @@ fn summary_for(err: &Error) -> String {
             "The configured model adapter does not expose the physical-dispatch control required \
              by large-review mode. Configure a supported model gateway or disable large-review \
              mode for this deployment."
+        }
+        Error::ReviewAttemptsExhausted { .. } => {
+            "Every attempt this commit was allowed ended before a review was produced — \
+             usually the server restarting, or stalling long enough to lose the review. \
+             Comment `@tinysweeper` on this pull request to review this commit again, or \
+             push a new commit."
         }
         _ => "Re-run the review once the underlying problem is fixed.",
     };

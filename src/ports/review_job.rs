@@ -81,6 +81,16 @@ pub struct ReviewRequest {
     pub accepted_at_ms: i64,
 }
 
+impl ReviewRequest {
+    /// Whether a person explicitly asked for this review: the `@tinysweeper`
+    /// comment command. Pushes and redeliveries never are, so they cannot
+    /// re-arm a head that already failed terminally. Manual reviews are `Full`
+    /// and keep their own per-job budget, so they never needed re-arming.
+    pub fn is_explicit_rerequest(&self) -> bool {
+        self.mode == ReviewJobMode::Incremental && self.event == "issue_comment"
+    }
+}
+
 /// Atomic admission result for one webhook or an entire manual expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
@@ -889,6 +899,9 @@ impl ReviewSchedulerState {
             return Admission::Full;
         }
         for request in requests {
+            if request.is_explicit_rerequest() {
+                self.rearm_failed_head(&request.repo, request.number);
+            }
             let mut detached_checks = Vec::new();
             let initial_check = request.head_sha.as_ref().map(|head_sha| ReviewCheckRecord {
                 head_sha: head_sha.clone(),
@@ -1048,6 +1061,40 @@ impl ReviewSchedulerState {
                 record.head_history_reservations = Some(record.accepted_ids.len());
             }
         }
+    }
+
+    /// Clear a failed terminal result from the pull request's last confirmed
+    /// head so an explicit re-request can review it again.
+    ///
+    /// Only `Exhausted` and `Deadline` are failures a person can reasonably
+    /// ask to retry; a `Published` or `Declined` head stays terminal, so a
+    /// comment still cannot buy a second paid review of a reviewed commit.
+    /// The head's paid budget starts over, as it would after a push. Matching
+    /// head history goes too, so a force-push back to that head is covered.
+    fn rearm_failed_head(&mut self, repo: &str, number: u64) {
+        let failed = |outcome: Option<TerminalOutcome>, deadline_hit: bool| match outcome {
+            Some(TerminalOutcome::Exhausted | TerminalOutcome::Deadline) => true,
+            None => deadline_hit,
+            Some(_) => false,
+        };
+        let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
+            budget.repo == repo
+                && budget.number == number
+                && failed(budget.terminal_outcome, budget.deadline_hit)
+        }) else {
+            return;
+        };
+        budget.terminal_outcome = None;
+        budget.deadline_hit = false;
+        budget.paid_attempts = 0;
+        budget.ownership_refunds = 0;
+        let head = budget.head_sha.clone();
+        self.head_history.retain(|record| {
+            !(record.repo == repo
+                && record.number == number
+                && record.head_sha == head
+                && failed(Some(record.outcome), false))
+        });
     }
 
     /// Claim the oldest eligible record within the configured global bound.

@@ -1303,6 +1303,15 @@ where
     }
 }
 
+/// What an exhausted head reports. Not `NotReviewed`: that conclusion is for a
+/// run that stopped deliberately, and on 2026-10-30 heads whose every attempt
+/// was lost to host stalls read "Not reviewed" with no lane checks, which looked
+/// like a decision rather than a failure. `ActionRequired` also keeps auto-merge
+/// from treating the missing review as consent.
+static EXHAUSTED_REVIEW: Error = Error::ReviewAttemptsExhausted {
+    attempts: crate::ports::review_job::MAX_REVIEW_PAID_ATTEMPTS,
+};
+
 async fn finalize_exhausted_review<CheckOwner, CheckOwnerFuture, Conclude, ConcludeFuture>(
     timing: &crate::review_timing::ReviewTiming,
     check_owner: CheckOwner,
@@ -1317,7 +1326,7 @@ where
     if check_owner().await.is_err() {
         return WorkerDisposition::OwnershipLost;
     }
-    conclude(Conclusion::NotReviewed).await;
+    conclude(Conclusion::Failed(&EXHAUSTED_REVIEW)).await;
     timing.finish("failure");
     WorkerDisposition::Terminal(TerminalOutcome::Exhausted)
 }

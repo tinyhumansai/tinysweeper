@@ -143,6 +143,17 @@ pub enum Error {
     #[error("review worker ownership expired or was replaced")]
     ReviewOwnershipLost,
 
+    /// Every paid start one head was allowed ended without a review.
+    ///
+    /// Reported on the umbrella check as a failure rather than "Not reviewed":
+    /// the review was wanted and could not be produced, so it must read as
+    /// broken and say how to ask again.
+    #[error("the review used all {attempts} paid attempts for this commit without completing")]
+    ReviewAttemptsExhausted {
+        /// The per-head paid-attempt budget that was spent.
+        attempts: u32,
+    },
+
     /// A feature required for this code path was not compiled in.
     #[error("{0} requires the `{1}` feature; rebuild with --features {1}")]
     FeatureDisabled(&'static str, &'static str),
