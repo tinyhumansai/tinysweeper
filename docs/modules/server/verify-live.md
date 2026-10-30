@@ -72,7 +72,7 @@ live half of the fix's regression test.
 - the server log shows any `outcome=cancelled` run, any "ownership expired or
   was replaced", or any `Unable to create …lock`;
 - the zombie count under the server process rose;
-- or any PR's umbrella check settled as "Not reviewed" or never settled.
+- or any PR's umbrella check settled with a verdict where no review ran ("Not reviewed", "Review incomplete", "The review could not reach a model", …) or never settled. An oversize refusal passes.
 
 It prints time from enqueue to verdict, p50 and p95.
 
