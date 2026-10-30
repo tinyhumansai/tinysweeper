@@ -1114,7 +1114,7 @@ async fn run_owned_review(
         owned.clone(),
         lost_tx,
         owner_until_tx,
-        std::time::Duration::from_secs(15),
+        REVIEW_HEARTBEAT_INTERVAL,
     );
 
     let request = &owned.request;
@@ -1370,16 +1370,33 @@ fn spawn_review_heartbeat(
         loop {
             tokio::time::sleep(interval).await;
             let renewal_started = tokio::time::Instant::now();
-            match store.renew(&owned, unix_time_ms()).await {
+            let renewed = store.renew(&owned, unix_time_ms()).await;
+            let elapsed = renewal_started.elapsed();
+            // A slow renewal is the early warning for the stalls that used to
+            // cost whole reviews: it shows how close a worker came to its
+            // local fence while there is still time to act on the host.
+            if elapsed > SLOW_HEARTBEAT_RENEWAL {
+                tracing::warn!(
+                    job_id = %owned.request.id.0,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "slow review ownership heartbeat renewal"
+                );
+            }
+            match renewed {
                 Ok(true) => {
                     let _ = owner_until.send(conservative_owner_deadline(renewal_started));
                 }
                 Ok(false) => {
+                    tracing::warn!(
+                        job_id = %owned.request.id.0,
+                        generation = owned.generation,
+                        "review ownership lost: record replaced or expired"
+                    );
                     let _ = lost.send(true);
                     return;
                 }
                 Err(err) => {
-                    tracing::error!(%err, "could not renew durable review ownership");
+                    tracing::error!(%err, job_id = %owned.request.id.0, "could not renew durable review ownership");
                     let _ = lost.send(true);
                     return;
                 }
@@ -1388,10 +1405,27 @@ fn spawn_review_heartbeat(
     }))
 }
 
+/// How often a running review renews its durable owner lease.
+const REVIEW_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How far inside the durable owner TTL the local fence stops work. It absorbs
+/// clock skew between this process and the store that stamped the renewal.
+const LOCAL_OWNER_FENCE_MARGIN_MS: i64 = 10_000;
+
+/// A renewal slower than this is logged: it is a host or store stall eating
+/// into the owner lease, well before the stall is long enough to lose it.
+const SLOW_HEARTBEAT_RENEWAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+const _: () = assert!(
+    crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS
+        > 2 * REVIEW_HEARTBEAT_INTERVAL.as_millis() as i64,
+    "the local owner fence must outlast more than one missed heartbeat"
+);
+
 fn conservative_owner_deadline(started: tokio::time::Instant) -> tokio::time::Instant {
     started
         + std::time::Duration::from_millis(
-            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - 10_000) as u64,
+            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS) as u64,
         )
 }
 
