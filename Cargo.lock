@@ -4942,6 +4942,7 @@ dependencies = [
  "globset",
  "hmac 0.13.0",
  "jsonwebtoken 11.1.0",
+ "libc",
  "mongodb",
  "octocrab",
  "openhuman-embed",
