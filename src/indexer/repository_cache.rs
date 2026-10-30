@@ -213,12 +213,15 @@ impl RepositoryCache {
 ///
 /// Only this server writes the cache, every write happens under the
 /// per-repository lock, and no git invocation of ours outlives
-/// [`GIT_TIMEOUT`](crate::indexer::fetch::GIT_TIMEOUT): a lock older than
-/// that cannot belong to a live git, only to one that was killed before it
-/// could clean up. A younger lock is left alone even though it may well be
-/// debris too — stealing a live git's lock corrupts the mirror, while
-/// respecting a dead one costs one failed fetch until it ages out.
-const STALE_LOCK_AGE: std::time::Duration = crate::indexer::fetch::GIT_TIMEOUT;
+/// [`GIT_TIMEOUT`](crate::indexer::fetch::GIT_TIMEOUT) plus the
+/// [`GIT_TERMINATION_GRACE`](crate::indexer::fetch::GIT_TERMINATION_GRACE)
+/// it is given to clean up: a lock older than that cannot belong to a live
+/// git, only to one that was killed before it could remove it. A younger lock
+/// is left alone even though it may well be debris too — stealing a live
+/// git's lock corrupts the mirror, while respecting a dead one costs failed
+/// fetches until it ages out.
+const STALE_LOCK_AGE: std::time::Duration =
+    crate::indexer::fetch::GIT_TIMEOUT.saturating_add(crate::indexer::fetch::GIT_TERMINATION_GRACE);
 
 /// The lockfiles git takes in a bare mirror's git dir. A SIGKILLed git never
 /// removes them, and the next git to want one fails with "File exists" —
