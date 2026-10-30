@@ -8732,9 +8732,11 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            |conclusion| async move {
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
                 forge
-                    .update_check(&repo, check_id, conclusion_check_run("sha-7", &conclusion))
+                    .update_check(repo, check_id, conclusion_check_run("sha-7", &conclusion))
                     .await
                     .expect("conclude the open check");
             },
@@ -8869,9 +8871,11 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            |conclusion| async move {
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
                 forge
-                    .update_check(&repo, check_id, conclusion_check_run("sha-8", &conclusion))
+                    .update_check(repo, check_id, conclusion_check_run("sha-8", &conclusion))
                     .await
                     .expect("conclude fresh recovery check");
             },
@@ -9006,9 +9010,11 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            |conclusion| async move {
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
                 forge
-                    .update_check(&repo, stale_check_id, conclusion_check_run("sha-9", &conclusion))
+                    .update_check(repo, stale_check_id, conclusion_check_run("sha-9", &conclusion))
                     .await
                     .expect("stale close is rejected before reaching the forge");
             },
