@@ -460,7 +460,10 @@ async fn exhaust_head(store: &MockReviewJobStore, number: u64) -> i64 {
     let mut now_ms = unix_time_ms();
     for generation in 0..crate::ports::review_job::MAX_REVIEW_PAID_ATTEMPTS {
         let owned = next_owner(store, &format!("spent-{generation}"), number, now_ms).await;
-        assert!(matches!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned, now_ms).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         now_ms += crate::ports::review_job::REVIEW_OWNER_TTL_MS + 1;
     }
     let owned = next_owner(store, "exhausted", number, now_ms).await;
@@ -534,7 +537,10 @@ async fn a_comment_rerequest_on_an_exhausted_head_is_admitted_and_reviewed() {
         ReconciledReviewCheck::Ready(_)
     ));
     assert!(!store.head_is_terminal(&owned, now_ms).await.unwrap());
-    assert!(matches!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Started { .. }
+    ));
 }
 
 #[tokio::test]
@@ -545,7 +551,10 @@ async fn a_comment_on_a_published_head_still_does_not_rereview_it() {
     store.admit_batch(vec![stalled_review(49)]).await.unwrap();
     let now_ms = unix_time_ms();
     let owned = next_owner(&store, "publisher", 49, now_ms).await;
-    assert!(matches!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Started { .. }
+    ));
     assert!(
         store
             .finish(&owned, TerminalOutcome::Published, now_ms, now_ms)

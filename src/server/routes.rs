@@ -1344,6 +1344,7 @@ enum PaidWork<T> {
     OwnershipLost,
 }
 
+#[cfg(test)]
 async fn with_paid_review_attempt<T, F, Fut>(
     store: &dyn ReviewJobStore,
     owned: &OwnedReview,
@@ -1354,8 +1355,23 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
+    with_charged_paid_review_attempt(store, owned, now_ms, |_epoch| work()).await
+}
+
+/// Charge one paid start, then run `work` with the budget epoch it was
+/// charged in — the epoch a later refund of this start has to name.
+async fn with_charged_paid_review_attempt<T, F, Fut>(
+    store: &dyn ReviewJobStore,
+    owned: &OwnedReview,
+    now_ms: i64,
+    work: F,
+) -> Result<PaidWork<T>>
+where
+    F: FnOnce(u64) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
     match store.begin_paid(owned, now_ms).await? {
-        PaidStart::Started => Ok(PaidWork::Started(work().await)),
+        PaidStart::Started { epoch } => Ok(PaidWork::Started(work(epoch).await)),
         PaidStart::Exhausted => Ok(PaidWork::Exhausted),
         PaidStart::OwnershipLost => Ok(PaidWork::OwnershipLost),
     }
@@ -3747,6 +3763,7 @@ where
     }
 }
 
+#[cfg(test)]
 async fn review_with_paid_budget_and_status<
     Start,
     StartFuture,
@@ -3770,6 +3787,35 @@ where
     Review: FnOnce() -> ReviewFuture,
     ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
 {
+    review_with_charged_paid_budget(store, owned, now_ms, |_epoch| start(), open_status, review)
+        .await
+}
+
+/// Open the status, charge the paid start, then review. `start` receives the
+/// charged budget epoch, or `None` for an unowned review that charges nothing.
+async fn review_with_charged_paid_budget<
+    Start,
+    StartFuture,
+    OpenStatus,
+    OpenStatusFuture,
+    Review,
+    ReviewFuture,
+>(
+    store: &dyn ReviewJobStore,
+    owned: Option<&OwnedReview>,
+    now_ms: i64,
+    start: Start,
+    open_status: OpenStatus,
+    review: Review,
+) -> Result<InnerReview>
+where
+    Start: FnOnce(Option<u64>) -> StartFuture,
+    StartFuture: std::future::Future<Output = Result<()>>,
+    OpenStatus: FnOnce() -> OpenStatusFuture,
+    OpenStatusFuture: std::future::Future<Output = Result<bool>>,
+    Review: FnOnce() -> ReviewFuture,
+    ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
+{
     // Open or resume the check before exhausting the paid-attempt budget. A
     // recovered job at the limit still needs a check to conclude, and shutdown
     // must defer without consuming a paid attempt.
@@ -3779,13 +3825,15 @@ where
     }
 
     if let Some(owned) = owned {
-        match with_paid_review_attempt(store, owned, now_ms, start).await? {
+        match with_charged_paid_review_attempt(store, owned, now_ms, |epoch| start(Some(epoch)))
+            .await?
+        {
             PaidWork::Started(result) => result?,
             PaidWork::Exhausted => return Ok(InnerReview::Exhausted),
             PaidWork::OwnershipLost => return Err(Error::ReviewOwnershipLost),
         }
     } else {
-        start().await?;
+        start(None).await?;
     }
     continue_after_open_status(true, review).await
 }
@@ -3821,15 +3869,17 @@ where
 {
     // `start` only runs once `begin_paid` has charged this attempt, so it is
     // where a charge becomes refundable; a fence before the charge refunds
-    // nothing.
-    let charged = std::sync::atomic::AtomicBool::new(false);
+    // nothing. The epoch binds the refund to the budget it was charged
+    // against: a re-request that re-arms the head in between opens a new
+    // epoch, and a late refund must not return one of its starts.
+    let charged_epoch = std::sync::Mutex::new(None);
     let calls_before = model_calls_dispatched(execution, timing);
-    let result = review_with_paid_budget_and_status(
+    let result = review_with_charged_paid_budget(
         store,
         owned,
         now_ms,
-        || {
-            charged.store(true, std::sync::atomic::Ordering::SeqCst);
+        |epoch| {
+            *charged_epoch.lock().expect("charged epoch") = epoch;
             start()
         },
         open_status,
@@ -3848,12 +3898,16 @@ where
         Err(_) => execution.is_cancelled(),
         Ok(_) => false,
     };
+    let charged_epoch = *charged_epoch.lock().expect("charged epoch");
     if let Some(owned) = owned
         && fenced
-        && charged.load(std::sync::atomic::Ordering::SeqCst)
+        && let Some(epoch) = charged_epoch
         && model_calls_dispatched(execution, timing) == calls_before
     {
-        match store.refund_paid(owned, head_sha, unix_time_ms()).await {
+        match store
+            .refund_paid(owned, head_sha, epoch, unix_time_ms())
+            .await
+        {
             Ok(true) => tracing::info!(
                 job_id = %owned.request.id.0,
                 "refunded a paid attempt fenced before any model call"
@@ -5835,7 +5889,10 @@ mod tests {
         seed_previously_published_queue_checks(&*store, now).await;
         let owned = store.claim_next("old-worker", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned, "head-a", now + 1).await.unwrap());
-        assert!(matches!(store.begin_paid(&owned, now + 2).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned, now + 2).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
 
         let mut next = first;
         next.id = crate::ports::review_job::ReviewJobId("push-b-budget-race".into());
@@ -6019,7 +6076,10 @@ mod tests {
             .unwrap();
         assert_eq!(owned.accepted_ids.len(), 3);
         assert!(store.confirm_head(&owned, "head-c", now + 5).await.unwrap());
-        assert!(matches!(store.begin_paid(&owned, now + 6).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned, now + 6).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
 
         let model = MockModel::silent();
         let forge = MockForge::new();
@@ -6136,7 +6196,10 @@ mod tests {
         let owned_a = store.claim_next("worker-a", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned_a, "head-a", now).await.unwrap());
         let owned_a_for_status = owned_a.clone();
-        assert!(matches!(store.begin_paid(&owned_a, now + 1).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned_a, now + 1).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
 
         let a_dropped = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(CallTracker {
@@ -6280,7 +6343,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(matches!(store.begin_paid(&owned_b, unix_time_ms()).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned_b, unix_time_ms()).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         let repo = RepoId::parse("owner/repo").unwrap();
         let queued_b = forge
             .writes()
@@ -6435,7 +6501,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(matches!(store.begin_paid(&newer, now + 2).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&newer, now + 2).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         let forge = MockForge::new();
         let model = MockModel::silent();
         let repo_id = RepoId::parse("owner/repo").unwrap();
@@ -6610,7 +6679,10 @@ mod tests {
         else {
             panic!("the first delivery's queued check was published");
         };
-        assert!(matches!(store.begin_paid(&owned, now + 3).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned, now + 3).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         let open = ReviewStatus {
             repo: repo.clone(),
             check_id: check.check_id.expect("published check id"),
@@ -8265,7 +8337,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(matches!(store.begin_paid(&active, now + 2).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&active, now + 2).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
 
         // The prior model attempt failed transiently. A delivery arrives during
         // its backoff, so the next handle_review attempt boundary sees the yield.
@@ -9813,7 +9888,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(matches!(store.begin_paid(&owned, now + 3).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owned, now + 3).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .check_transition_current(&owned, "same-id-head", queued_id, now + 4)
@@ -9969,7 +10047,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert!(matches!(store.begin_paid(&owner, 14).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&owner, 14).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .finish(&owner, TerminalOutcome::Exhausted, 20, 20)
@@ -11291,7 +11372,10 @@ mod tests {
             "the Full job stays queued while the one shared worker slot is occupied"
         );
 
-        assert!(matches!(store.begin_paid(&incremental, now_ms + 5).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&incremental, now_ms + 5).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .finish(
@@ -11316,7 +11400,10 @@ mod tests {
         assert_eq!(full.request.mode, ReviewJobMode::Full);
         assert_eq!(full.request.head_sha.as_deref(), Some("abc123"));
         confirm_test_head(store.as_ref(), &full, now_ms + 9).await;
-        assert!(matches!(store.begin_paid(&full, now_ms + 10).await.unwrap(), PaidStart::Started { .. }));
+        assert!(matches!(
+            store.begin_paid(&full, now_ms + 10).await.unwrap(),
+            PaidStart::Started { .. }
+        ));
         let incrementals = store.snapshot_for_test().incremental_heads;
         assert!(
             incrementals.iter().any(|head| {

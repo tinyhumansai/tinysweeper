@@ -374,7 +374,10 @@ async fn published_review_is_not_retired_as_not_reviewed_when_status_updates_fai
         super::ReviewCheckStage::Queued
     );
     assert!(store.confirm_head(&owned, "sha", 13).await.unwrap());
-    assert!(matches!(store.begin_paid(&owned, 14).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&owned, 14).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
     assert!(
         store
             .finish(&owned, TerminalOutcome::Published, 20, 20)
@@ -401,7 +404,10 @@ fn published_head_is_not_retired_as_not_reviewed_when_owner_yields() {
     assert!(state.record_queued_check_id(&pending, 78, 11));
     let owned = state.claim_next("review-worker", 12).unwrap();
     assert!(state.confirm_head(&owned, "head-a", 13));
-    assert!(matches!(state.begin_paid(&owned, 14), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        state.begin_paid(&owned, 14),
+        super::PaidStart::Started { .. }
+    ));
 
     let mut next = first;
     next.id = ReviewJobId("push-head-b".into());
@@ -789,7 +795,10 @@ async fn delayed_old_hint_yields_but_confirming_the_live_head_keeps_its_paid_bud
         .unwrap()
         .unwrap();
     assert!(store.confirm_head(&active, "head-b", 21).await.unwrap());
-    assert!(matches!(store.begin_paid(&active, 22).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&active, 22).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
 
     let mut delayed = newer;
     delayed.id = ReviewJobId("push-a-delayed".into());
@@ -804,7 +813,10 @@ async fn delayed_old_hint_yields_but_confirming_the_live_head_keeps_its_paid_bud
         .unwrap()
         .unwrap();
     assert!(store.confirm_head(&resumed, "head-b", 26).await.unwrap());
-    assert!(matches!(store.begin_paid(&resumed, 27).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&resumed, 27).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
     assert_eq!(
         store.snapshot_for_test().incremental_heads[0].paid_attempts,
         2,
@@ -850,7 +862,10 @@ async fn a_deadline_is_terminal_for_the_confirmed_head_across_delivery_ids() {
         .unwrap()
         .unwrap();
     assert!(store.confirm_head(&timed_out, "head-a", 3).await.unwrap());
-    assert!(matches!(store.begin_paid(&timed_out, 4).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&timed_out, 4).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
     assert!(store.finish_deadline(&timed_out, 5).await.unwrap());
 
     first.id = ReviewJobId("push-a-redelivery".into());
@@ -883,7 +898,10 @@ async fn a_deadline_is_terminal_for_the_confirmed_head_across_delivery_ids() {
         .unwrap()
         .unwrap();
     assert!(store.confirm_head(&new_head, "head-b", 12).await.unwrap());
-    assert!(matches!(store.begin_paid(&new_head, 13).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&new_head, 13).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
 }
 
 #[tokio::test]
@@ -927,7 +945,10 @@ async fn a_push_racing_the_deadline_preserves_the_marker_until_live_head_resolut
     // Forge head clears the prior head's marker and makes new paid work eligible.
     assert!(store.confirm_head(&resumed, "head-b", 10).await.unwrap());
     assert!(!store.head_is_terminal(&resumed, 11).await.unwrap());
-    assert!(matches!(store.begin_paid(&resumed, 12).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&resumed, 12).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
 }
 
 #[tokio::test]
@@ -945,7 +966,10 @@ async fn paid_starts_require_a_head_confirmed_from_the_live_forge_read() {
         "the request SHA is an untrusted hint until the worker confirms the live head"
     );
     assert!(store.confirm_head(&owned, "actual-head", 4).await.unwrap());
-    assert!(matches!(store.begin_paid(&owned, 5).await.unwrap(), super::PaidStart::Started { .. }));
+    assert!(matches!(
+        store.begin_paid(&owned, 5).await.unwrap(),
+        super::PaidStart::Started { .. }
+    ));
 }
 
 #[test]
@@ -1398,7 +1422,12 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
         let epoch = started_epoch(store.begin_paid(&owned, now_ms).await.unwrap());
         now_ms += REVIEW_OWNER_TTL_MS + 1;
         // The owner has already lapsed: a refund does not need live ownership.
-        assert!(store.refund_paid(&owned, "sha", epoch, now_ms).await.unwrap());
+        assert!(
+            store
+                .refund_paid(&owned, "sha", epoch, now_ms)
+                .await
+                .unwrap()
+        );
     }
     let budget = &store.snapshot_for_test().incremental_heads[0];
     assert_eq!(budget.paid_attempts, 0);
@@ -1409,7 +1438,12 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
     for generation in 0..MAX_REVIEW_PAID_ATTEMPTS {
         let owned = reclaim_and_confirm(&store, &format!("capped-{generation}"), now_ms).await;
         let epoch = started_epoch(store.begin_paid(&owned, now_ms).await.unwrap());
-        assert!(!store.refund_paid(&owned, "sha", epoch, now_ms).await.unwrap());
+        assert!(
+            !store
+                .refund_paid(&owned, "sha", epoch, now_ms)
+                .await
+                .unwrap()
+        );
         now_ms += REVIEW_OWNER_TTL_MS + 1;
     }
     let owned = reclaim_and_confirm(&store, "exhausted", now_ms).await;
@@ -1427,7 +1461,12 @@ async fn a_refund_for_a_head_that_is_no_longer_current_changes_nothing() {
     store.admit_batch(vec![request("moved", 1)]).await.unwrap();
     let owned = reclaim_and_confirm(&store, "owner", 2).await;
     let epoch = started_epoch(store.begin_paid(&owned, 2).await.unwrap());
-    assert!(!store.refund_paid(&owned, "other-sha", epoch, 3).await.unwrap());
+    assert!(
+        !store
+            .refund_paid(&owned, "other-sha", epoch, 3)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         store.snapshot_for_test().incremental_heads[0].paid_attempts,
         1
@@ -1454,16 +1493,29 @@ async fn a_refund_from_before_a_rearm_cannot_return_a_start_charged_after_it() {
     let finisher = reclaim_and_confirm(&store, "finisher", 3 + REVIEW_OWNER_TTL_MS).await;
     assert!(
         store
-            .finish(&finisher, TerminalOutcome::Exhausted, 3 + REVIEW_OWNER_TTL_MS, 3 + REVIEW_OWNER_TTL_MS)
+            .finish(
+                &finisher,
+                TerminalOutcome::Exhausted,
+                3 + REVIEW_OWNER_TTL_MS,
+                3 + REVIEW_OWNER_TTL_MS
+            )
             .await
             .unwrap()
     );
     // ...and a comment re-arms it, and the fresh budget is charged once.
     let mut comment = request("comment", 4 + REVIEW_OWNER_TTL_MS);
     comment.event = "issue_comment".into();
-    assert_eq!(store.admit_batch(vec![comment]).await.unwrap(), Admission::Admitted);
+    assert_eq!(
+        store.admit_batch(vec![comment]).await.unwrap(),
+        Admission::Admitted
+    );
     let rearmed = reclaim_and_confirm(&store, "rearmed", 5 + REVIEW_OWNER_TTL_MS).await;
-    let current_epoch = started_epoch(store.begin_paid(&rearmed, 5 + REVIEW_OWNER_TTL_MS).await.unwrap());
+    let current_epoch = started_epoch(
+        store
+            .begin_paid(&rearmed, 5 + REVIEW_OWNER_TTL_MS)
+            .await
+            .unwrap(),
+    );
     assert_ne!(stale_epoch, current_epoch);
 
     assert!(
@@ -1473,5 +1525,8 @@ async fn a_refund_from_before_a_rearm_cannot_return_a_start_charged_after_it() {
             .unwrap(),
         "a refund from the old epoch is a no-op"
     );
-    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        1
+    );
 }
