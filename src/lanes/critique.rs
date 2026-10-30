@@ -328,7 +328,7 @@ impl Critique {
         // rather than per file: `llm` is shared across the fan-out, so adding
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
-        outcome.context_degraded = reviewed_without_context(input);
+        outcome.context_degraded = reviewed_without_context(&input);
         outcome.include_reviewed_paths(covered_without_model);
         outcome.spend.merge(llm.spend());
         if let Some(sub) = &mechanical {
