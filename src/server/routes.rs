@@ -5835,10 +5835,7 @@ mod tests {
         seed_previously_published_queue_checks(&*store, now).await;
         let owned = store.claim_next("old-worker", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned, "head-a", now + 1).await.unwrap());
-        assert_eq!(
-            store.begin_paid(&owned, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned, now + 2).await.unwrap(), PaidStart::Started { .. }));
 
         let mut next = first;
         next.id = crate::ports::review_job::ReviewJobId("push-b-budget-race".into());
@@ -6022,10 +6019,7 @@ mod tests {
             .unwrap();
         assert_eq!(owned.accepted_ids.len(), 3);
         assert!(store.confirm_head(&owned, "head-c", now + 5).await.unwrap());
-        assert_eq!(
-            store.begin_paid(&owned, now + 6).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned, now + 6).await.unwrap(), PaidStart::Started { .. }));
 
         let model = MockModel::silent();
         let forge = MockForge::new();
@@ -6142,10 +6136,7 @@ mod tests {
         let owned_a = store.claim_next("worker-a", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned_a, "head-a", now).await.unwrap());
         let owned_a_for_status = owned_a.clone();
-        assert_eq!(
-            store.begin_paid(&owned_a, now + 1).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned_a, now + 1).await.unwrap(), PaidStart::Started { .. }));
 
         let a_dropped = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(CallTracker {
@@ -6289,10 +6280,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            store.begin_paid(&owned_b, unix_time_ms()).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned_b, unix_time_ms()).await.unwrap(), PaidStart::Started { .. }));
         let repo = RepoId::parse("owner/repo").unwrap();
         let queued_b = forge
             .writes()
@@ -6447,10 +6435,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            store.begin_paid(&newer, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&newer, now + 2).await.unwrap(), PaidStart::Started { .. }));
         let forge = MockForge::new();
         let model = MockModel::silent();
         let repo_id = RepoId::parse("owner/repo").unwrap();
@@ -6625,10 +6610,7 @@ mod tests {
         else {
             panic!("the first delivery's queued check was published");
         };
-        assert_eq!(
-            store.begin_paid(&owned, now + 3).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned, now + 3).await.unwrap(), PaidStart::Started { .. }));
         let open = ReviewStatus {
             repo: repo.clone(),
             check_id: check.check_id.expect("published check id"),
@@ -8283,10 +8265,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            store.begin_paid(&active, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&active, now + 2).await.unwrap(), PaidStart::Started { .. }));
 
         // The prior model attempt failed transiently. A delivery arrives during
         // its backoff, so the next handle_review attempt boundary sees the yield.
@@ -9834,10 +9813,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            store.begin_paid(&owned, now + 3).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owned, now + 3).await.unwrap(), PaidStart::Started { .. }));
         assert!(
             store
                 .check_transition_current(&owned, "same-id-head", queued_id, now + 4)
@@ -9993,10 +9969,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            store.begin_paid(&owner, 14).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&owner, 14).await.unwrap(), PaidStart::Started { .. }));
         assert!(
             store
                 .finish(&owner, TerminalOutcome::Exhausted, 20, 20)
@@ -11318,10 +11291,7 @@ mod tests {
             "the Full job stays queued while the one shared worker slot is occupied"
         );
 
-        assert_eq!(
-            store.begin_paid(&incremental, now_ms + 5).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&incremental, now_ms + 5).await.unwrap(), PaidStart::Started { .. }));
         assert!(
             store
                 .finish(
@@ -11346,10 +11316,7 @@ mod tests {
         assert_eq!(full.request.mode, ReviewJobMode::Full);
         assert_eq!(full.request.head_sha.as_deref(), Some("abc123"));
         confirm_test_head(store.as_ref(), &full, now_ms + 9).await;
-        assert_eq!(
-            store.begin_paid(&full, now_ms + 10).await.unwrap(),
-            PaidStart::Started
-        );
+        assert!(matches!(store.begin_paid(&full, now_ms + 10).await.unwrap(), PaidStart::Started { .. }));
         let incrementals = store.snapshot_for_test().incremental_heads;
         assert!(
             incrementals.iter().any(|head| {

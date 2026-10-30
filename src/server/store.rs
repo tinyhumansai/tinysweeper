@@ -308,11 +308,17 @@ impl ReviewJobStore for Store {
             .await
     }
 
-    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, _now_ms: i64) -> Result<bool> {
+    async fn refund_paid(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        epoch: u64,
+        _now_ms: i64,
+    ) -> Result<bool> {
         let owned = owned.clone();
         let head_sha = head_sha.to_owned();
         self.change_review_scheduler(move |state, now_ms| {
-            state.refund_paid(&owned, &head_sha, now_ms)
+            state.refund_paid(&owned, &head_sha, epoch, now_ms)
         })
         .await
     }

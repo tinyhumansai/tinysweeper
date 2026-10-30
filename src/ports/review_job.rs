@@ -106,7 +106,10 @@ pub enum Admission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaidStart {
     /// This owner may proceed to credentials and review work.
-    Started,
+    Started {
+        /// Paid-budget epoch the start was charged in; a refund must name it.
+        epoch: u64,
+    },
     /// The retry budget was exhausted; its owner can now conclude status and finish it.
     Exhausted,
     /// This process no longer owns the unexpired generation.
@@ -1203,13 +1206,13 @@ impl ReviewSchedulerState {
                 return PaidStart::Exhausted;
             }
             budget.paid_attempts += 1;
-            return PaidStart::Started;
+            return PaidStart::Started { epoch: 0 };
         }
         if self.unfinished[index].paid_attempts >= MAX_REVIEW_PAID_ATTEMPTS {
             return PaidStart::Exhausted;
         }
         self.unfinished[index].paid_attempts += 1;
-        PaidStart::Started
+        PaidStart::Started { epoch: 0 }
     }
 
     /// Return one paid start whose attempt ended at an ownership fence before
@@ -1223,7 +1226,13 @@ impl ReviewSchedulerState {
     /// touch the head that was charged, and stop at
     /// [`MAX_REVIEW_OWNERSHIP_REFUNDS`] so a host that never stops stalling
     /// still ends in a visible exhausted result rather than an endless job.
-    pub fn refund_paid(&mut self, owned: &OwnedReview, head_sha: &str, _now_ms: i64) -> bool {
+    pub fn refund_paid(
+        &mut self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        _epoch: u64,
+        _now_ms: i64,
+    ) -> bool {
         let Some(record) = self
             .unfinished
             .iter_mut()
@@ -1905,7 +1914,13 @@ pub trait ReviewJobStore: Send + Sync {
 
     /// Return a paid start whose attempt was fenced before any model dispatch.
     /// Needs no live ownership: the fence is usually why ownership is gone.
-    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;
+    async fn refund_paid(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        epoch: u64,
+        now_ms: i64,
+    ) -> Result<bool>;
 
     /// Confirm the live head fetched from Forge after the review gate and lease.
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;
