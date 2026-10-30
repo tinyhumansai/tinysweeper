@@ -2975,7 +2975,7 @@ fn conclusion_check_run(head_sha: &str, conclusion: &Conclusion<'_>) -> crate::f
             findings,
             changes_requested,
             coverage,
-        } => status::completed(head_sha, *findings, *changes_requested, coverage.clone()),
+        } => status::completed(head_sha, *findings, *changes_requested, *coverage),
         Conclusion::NotReviewed => status::not_reviewed(head_sha),
         Conclusion::Failed(err) => failure::check_run(head_sha, err),
     }
