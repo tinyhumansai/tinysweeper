@@ -1238,6 +1238,104 @@ mod tests {
         );
     }
 
+    /// Whether `pid` has exited. A zombie counts: it is waiting on whoever
+    /// reaps it, which for an orphan is init and not this test.
+    #[cfg(unix)]
+    fn process_is_gone(pid: i32) -> bool {
+        // SAFETY: signal 0 sends nothing; it only asks whether `pid` exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        !alive
+            || std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(')')
+                    .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+            })
+    }
+
+    #[cfg(unix)]
+    async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !condition() {
+            assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A shell standing in for git: it records its helper's pid, turns SIGTERM
+    /// into a marker file — git's equivalent is removing its lockfiles — and
+    /// waits on a long-lived helper the way `git fetch` waits on
+    /// `git-remote-https`.
+    #[cfg(unix)]
+    fn git_like_script(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let script = dir.join("git-like.sh");
+        let mark = dir.join("terminated");
+        let helper = dir.join("helper.pid");
+        std::fs::write(
+            &script,
+            format!(
+                "trap 'touch {mark}; exit 0' TERM\nsleep 60 &\necho $! > {helper}.tmp\nmv {helper}.tmp {helper}\nwait\n",
+                mark = mark.display(),
+                helper = helper.display(),
+            ),
+        )
+        .unwrap();
+        (script, mark, helper)
+    }
+
+    #[cfg(unix)]
+    async fn helper_pid(path: &Path) -> i32 {
+        eventually("the helper is started", || path.exists()).await;
+        std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminating_a_git_child_asks_its_whole_process_group_to_exit_first() {
+        // Production: SIGKILL to `git` alone left `shallow.lock` behind and
+        // orphaned its helpers onto PID 1 as zombies. SIGTERM to the group
+        // lets git clean up and reaches the helpers too.
+        let dir = tempfile::tempdir().unwrap();
+        let (script, mark, helper) = git_like_script(dir.path());
+        let mut command = Command::new("sh");
+        command
+            .arg(&script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let helper = helper_pid(&helper).await;
+
+        let started = std::time::Instant::now();
+        let (exited, termination) = terminate_git_child(&mut child).await;
+
+        assert!(exited, "{termination}");
+        assert_eq!(termination, "");
+        assert!(mark.exists(), "the child must be sent SIGTERM before SIGKILL");
+        eventually("the helper exits with its group", || process_is_gone(helper)).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_a_running_git_command_terminates_its_whole_process_group() {
+        // The production path: a review cancelled mid-fetch drops the future
+        // running `git fetch`. kill_on_drop alone SIGKILLs git and orphans
+        // whatever it spawned.
+        let dir = tempfile::tempdir().unwrap();
+        let (script, mark, helper) = git_like_script(dir.path());
+        let alias = format!("alias.hang=!sh {}", script.display());
+        let helper = tokio::select! {
+            result = git_stdout(dir.path(), "", &["-c", &alias, "hang"]) => {
+                panic!("the hanging alias returned: {result:?}")
+            }
+            pid = helper_pid(&helper) => pid,
+        };
+
+        eventually("the dropped git's helper exits", || process_is_gone(helper)).await;
+        assert!(mark.exists(), "git's children must be sent SIGTERM, not only SIGKILL");
+    }
+
     #[test]
     fn cancellation_guard_removes_owned_initializing_entry_before_gitdir_exists() {
         let mirror = tempfile::tempdir().unwrap();
