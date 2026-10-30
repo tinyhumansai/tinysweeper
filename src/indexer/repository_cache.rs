@@ -747,6 +747,24 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_a_terminating_git_may_still_hold_is_not_swept() {
+        // A timed-out git is signalled at GIT_TIMEOUT and given the
+        // termination grace to remove its own locks; until that has run out
+        // the lock may still be live.
+        let mirror = tempfile::tempdir().expect("mirror directory");
+        let lock = mirror.path().join("shallow.lock");
+        write_lock(
+            &lock,
+            crate::indexer::fetch::GIT_TIMEOUT + crate::indexer::fetch::GIT_TERMINATION_GRACE
+                - std::time::Duration::from_secs(1),
+        );
+
+        remove_stale_git_locks(mirror.path(), STALE_LOCK_AGE);
+
+        assert!(lock.exists());
+    }
+
+    #[test]
     fn cache_root_override_wins_and_empty_override_uses_the_private_user_cache() {
         assert_eq!(
             cache_root(
