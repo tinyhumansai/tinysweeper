@@ -1137,13 +1137,16 @@ async fn run_owned_review(
         owned: Some(owned.clone()),
         queue_check: owned.review_check.clone(),
     };
-    let disposition = handle_review(
+    // Boxed for the same reason as in `dispatch`: the review future is deep
+    // enough that inlining its layout into a caller's state machine trips
+    // rustc's query depth limit in release builds.
+    let disposition = Box::pin(handle_review(
         state,
         job,
         Some(permit),
         Some(lost_rx),
         Some(owner_until_rx),
-    )
+    ))
     .await;
 
     let result =
@@ -1432,7 +1435,12 @@ async fn dispatch(
             installation,
             head_sha,
         } => {
-            let _ = handle_review(
+            // Boxed, not awaited inline: the review future's layout is deep
+            // enough (lanes, git, retrieval, publish) that nesting it in
+            // `dispatch`'s state machine overflows rustc's query depth limit
+            // in release builds ("computing layout of async fn body of
+            // dispatch"). One allocation per review is nothing beside it.
+            let _ = Box::pin(handle_review(
                 state,
                 ReviewJob {
                     repo,
@@ -1449,7 +1457,7 @@ async fn dispatch(
                 review_permit,
                 None,
                 None,
-            )
+            ))
             .await;
         }
         Action::TriageIssue {
