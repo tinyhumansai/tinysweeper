@@ -25,6 +25,11 @@ Anything that depends on index state (the stale-index gate, cache locks) is
 canary-only.
 
 `canary` queues manual reviews exactly as the **Manual review** workflow does.
+It skips PRs that are not open (a merged PR is declined in a second, which
+would read as a false failure). It also retries a 503: the admin route admits
+a manual review only while a review slot is free, so a burst larger than
+`review_concurrency` waits its turn. Latency runs from the moment the server
+accepted each PR.
 The admin token is read on the box and fed to `curl` on stdin; it is never
 copied off the box. The script then polls GitHub and the server log until every
 PR settles.
@@ -48,8 +53,8 @@ newest open PRs. The default set is chosen to cover each failure seen on
 
 | PR (openhuman) | Why it is in the set |
 | --- | --- |
-| #8495, #8496 | Critique findings were produced but withheld behind a stale index |
-| #8425, #8460, #8477 | Large PRs that ended "Not reviewed" after repeated ownership-loss cancels |
+| #8495 | Critique findings were produced but withheld behind a stale index |
+| #8425 | A large PR that ended "Not reviewed" after repeated ownership-loss cancels |
 | #8511 | Large-review budget omissions |
 | #8510, #8494 | Small controls that reviewed cleanly |
 
