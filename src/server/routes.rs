@@ -5696,7 +5696,7 @@ mod tests {
                 .begin_paid(&replacement, unix_time_ms())
                 .await
                 .unwrap(),
-            crate::ports::review_job::PaidStart::Started
+            crate::ports::review_job::PaidStart::Started { .. }
         ));
         assert!(
             store
@@ -8341,7 +8341,7 @@ mod tests {
         assert!(!store.head_is_terminal(&resumed, now + 8).await.unwrap());
         assert_eq!(
             store.begin_paid(&resumed, now + 9).await.unwrap(),
-            PaidStart::Started,
+            PaidStart::Started { epoch: 0 },
             "a delivery hint during backoff must not mark B exhausted"
         );
         let model = MockModel::silent();

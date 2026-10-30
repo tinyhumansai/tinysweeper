@@ -1395,10 +1395,10 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
     let mut now_ms = 2;
     for generation in 0..MAX_REVIEW_OWNERSHIP_REFUNDS {
         let owned = reclaim_and_confirm(&store, &format!("owner-{generation}"), now_ms).await;
-        assert!(matches!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started { .. }));
+        let epoch = started_epoch(store.begin_paid(&owned, now_ms).await.unwrap());
         now_ms += REVIEW_OWNER_TTL_MS + 1;
         // The owner has already lapsed: a refund does not need live ownership.
-        assert!(store.refund_paid(&owned, "sha", now_ms).await.unwrap());
+        assert!(store.refund_paid(&owned, "sha", epoch, now_ms).await.unwrap());
     }
     let budget = &store.snapshot_for_test().incremental_heads[0];
     assert_eq!(budget.paid_attempts, 0);
@@ -1408,8 +1408,8 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
     // never stops stalling still ends in a visible exhausted result.
     for generation in 0..MAX_REVIEW_PAID_ATTEMPTS {
         let owned = reclaim_and_confirm(&store, &format!("capped-{generation}"), now_ms).await;
-        assert!(matches!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started { .. }));
-        assert!(!store.refund_paid(&owned, "sha", now_ms).await.unwrap());
+        let epoch = started_epoch(store.begin_paid(&owned, now_ms).await.unwrap());
+        assert!(!store.refund_paid(&owned, "sha", epoch, now_ms).await.unwrap());
         now_ms += REVIEW_OWNER_TTL_MS + 1;
     }
     let owned = reclaim_and_confirm(&store, "exhausted", now_ms).await;
@@ -1426,10 +1426,52 @@ async fn a_refund_for_a_head_that_is_no_longer_current_changes_nothing() {
     let store = MockReviewJobStore::default();
     store.admit_batch(vec![request("moved", 1)]).await.unwrap();
     let owned = reclaim_and_confirm(&store, "owner", 2).await;
-    assert!(matches!(store.begin_paid(&owned, 2).await.unwrap(), PaidStart::Started { .. }));
-    assert!(!store.refund_paid(&owned, "other-sha", 3).await.unwrap());
+    let epoch = started_epoch(store.begin_paid(&owned, 2).await.unwrap());
+    assert!(!store.refund_paid(&owned, "other-sha", epoch, 3).await.unwrap());
     assert_eq!(
         store.snapshot_for_test().incremental_heads[0].paid_attempts,
         1
     );
+}
+
+fn started_epoch(start: super::PaidStart) -> u64 {
+    match start {
+        super::PaidStart::Started { epoch } => epoch,
+        other => panic!("expected a charged start, got {other:?}"),
+    }
+}
+
+/// A refund is bound to the budget epoch it was charged in. A late refund
+/// from before an `@tinysweeper` re-arm must not return a start charged
+/// against the fresh budget the re-request opened.
+#[tokio::test]
+async fn a_refund_from_before_a_rearm_cannot_return_a_start_charged_after_it() {
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![request("epochs", 1)]).await.unwrap();
+    let fenced = reclaim_and_confirm(&store, "fenced", 2).await;
+    let stale_epoch = started_epoch(store.begin_paid(&fenced, 2).await.unwrap());
+    // Before the fenced owner's refund lands, the head ends Exhausted...
+    let finisher = reclaim_and_confirm(&store, "finisher", 3 + REVIEW_OWNER_TTL_MS).await;
+    assert!(
+        store
+            .finish(&finisher, TerminalOutcome::Exhausted, 3 + REVIEW_OWNER_TTL_MS, 3 + REVIEW_OWNER_TTL_MS)
+            .await
+            .unwrap()
+    );
+    // ...and a comment re-arms it, and the fresh budget is charged once.
+    let mut comment = request("comment", 4 + REVIEW_OWNER_TTL_MS);
+    comment.event = "issue_comment".into();
+    assert_eq!(store.admit_batch(vec![comment]).await.unwrap(), Admission::Admitted);
+    let rearmed = reclaim_and_confirm(&store, "rearmed", 5 + REVIEW_OWNER_TTL_MS).await;
+    let current_epoch = started_epoch(store.begin_paid(&rearmed, 5 + REVIEW_OWNER_TTL_MS).await.unwrap());
+    assert_ne!(stale_epoch, current_epoch);
+
+    assert!(
+        !store
+            .refund_paid(&fenced, "sha", stale_epoch, 6 + REVIEW_OWNER_TTL_MS)
+            .await
+            .unwrap(),
+        "a refund from the old epoch is a no-op"
+    );
+    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
 }
