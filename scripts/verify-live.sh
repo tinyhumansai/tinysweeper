@@ -17,7 +17,8 @@
 #           `/admin/reviews` (this DOES publish check runs on those PRs, like
 #           the Manual review button), then poll GitHub and the server log in
 #           parallel until every PR settles. Asserts no cancelled runs, no
-#           stale git locks, no zombie growth and no head left "Not reviewed".
+#           stale git locks, no zombie growth, and that every head settled
+#           with a review that ran (not "Not reviewed", incomplete or failed).
 #           It is the only tier that exercises the scheduler heartbeat, the
 #           repository cache and PID 1, which the CLI does not touch.
 #
@@ -131,7 +132,7 @@ run_canary() {
   for pr in "${prs[@]}"; do
     heads+=("$(gh pr view -R "$repo" "$pr" --json headRefOid -q .headRefOid)")
     # Token stays on the box: read from .env and fed to curl on stdin.
-    remote "printf 'header = \"Authorization: Bearer %s\"\n' \"\$(grep ^TINYSWEEPER_ADMIN_TOKEN= .env | cut -d= -f2-)\" | curl --config - -fsS -X POST http://127.0.0.1:\$(grep ^TINYSWEEPER_HOST_PORT= .env | cut -d= -f2- || echo 8081)/admin/reviews/$repo -H 'Content-Type: application/json' -d '{\"number\": $pr}' >/dev/null" &
+    remote "port=\$(sed -n 's/^TINYSWEEPER_HOST_PORT=//p' .env); printf 'header = \"Authorization: Bearer %s\"\n' \"\$(sed -n 's/^TINYSWEEPER_ADMIN_TOKEN=//p' .env)\" | curl --config - -fsS -X POST http://127.0.0.1:\${port:-8081}/admin/reviews/$repo -H 'Content-Type: application/json' -d '{\"number\": $pr}' >/dev/null" &
   done
   wait
   local queued_at; queued_at=$(date +%s)
@@ -169,7 +170,14 @@ run_canary() {
   for pr in "${prs[@]}"; do
     local v=${verdict[$pr]:-"(unsettled)"}
     printf '%-6s %8s  %s\n' "$pr" "${done_at[$pr]:--}" "$v"
-    case $v in "Not reviewed"|"(unsettled)") failed=1 ;; esac
+    # Pass only verdicts where a review actually ran (or a deliberate
+    # oversize refusal). Everything else is a failure, including outcomes
+    # like "The review could not reach a model" or "Review incomplete",
+    # which also settle as `completed`.
+    case $v in
+      Reviewed*|"Changes requested"*|"The pull request is too large"*) ;;
+      *) failed=1 ;;
+    esac
   done
   local p50 p95
   p50=$(for p in "${prs[@]}"; do [ -n "${done_at[$p]:-}" ] && echo "${done_at[$p]}"; done | pct 50)
