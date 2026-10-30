@@ -908,11 +908,9 @@ async fn stop_git_process_group(
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     let killed = signal_process_group(group, libc::SIGKILL);
-    if killed.is_err() {
-        // The group could not be signalled at all; make sure the leader, at
-        // least, does not outlive this call.
-        let _ = child.start_kill();
-    }
+    // The leader directly as well, so a child that is somehow not leading its
+    // own group still cannot outlive this call. Harmless once it has exited.
+    let _ = child.start_kill();
     terminated.and(killed)
 }
 
