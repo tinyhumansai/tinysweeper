@@ -128,16 +128,23 @@ run_canary() {
   pid=$(remote "docker inspect tinysweeper-tinysweeper-1 --format '{{.State.Pid}}'")
   z0=$(remote "ps -eo ppid=,stat= | awk -v p=$pid '\$1==p && \$2~/Z/' | wc -l")
   echo "canary: queueing ${#prs[@]} manual reviews on $repo via $host (zombies under server: $z0)"
+  # Heads are resolved before anything is queued, so no review is already
+  # running while the burst is still being assembled.
   local heads=()
   for pr in "${prs[@]}"; do
     heads+=("$(gh pr view -R "$repo" "$pr" --json headRefOid -q .headRefOid)")
+  done
+  # Latency is measured per PR from the moment its own request goes out,
+  # not from the end of the burst, which would understate early PRs.
+  declare -A sent_at done_at verdict
+  for pr in "${prs[@]}"; do
+    sent_at[$pr]=$(date +%s)
     # Token stays on the box: read from .env and fed to curl on stdin.
     remote "port=\$(sed -n 's/^TINYSWEEPER_HOST_PORT=//p' .env); printf 'header = \"Authorization: Bearer %s\"\n' \"\$(sed -n 's/^TINYSWEEPER_ADMIN_TOKEN=//p' .env)\" | curl --config - -fsS -X POST http://127.0.0.1:\${port:-8081}/admin/reviews/$repo -H 'Content-Type: application/json' -d '{\"number\": $pr}' >/dev/null" &
   done
   wait
   local queued_at; queued_at=$(date +%s)
 
-  declare -A done_at verdict
   while :; do
     local pending=0
     for i in "${!prs[@]}"; do
@@ -148,7 +155,7 @@ run_canary() {
         -q '.check_runs[0] | "\(.status)\t\(.started_at)\t\(.output.title)"' 2>/dev/null || true)
       local status=${row%%$'\t'*} started; started=$(cut -f2 <<<"$row")
       if [ "$status" = completed ] && [[ "$started" > "$since" || "$started" == "$since" ]]; then
-        done_at[$pr]=$(( $(date +%s) - queued_at )); verdict[$pr]=$(cut -f3 <<<"$row")
+        done_at[$pr]=$(( $(date +%s) - sent_at[$pr] )); verdict[$pr]=$(cut -f3 <<<"$row")
       else
         pending=$((pending + 1))
       fi
