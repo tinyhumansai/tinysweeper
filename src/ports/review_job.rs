@@ -17,8 +17,21 @@ pub const MAX_TERMINAL_REVIEW_RESERVATIONS: usize = 18_000;
 pub const MAX_RUNNING_REVIEWS: usize = 4;
 /// Paid recovery starts allowed for one accepted review across process restarts.
 pub const MAX_REVIEW_PAID_ATTEMPTS: u32 = 5;
+/// Paid starts that may be returned to one head's budget because their
+/// attempt ended at an ownership fence before any model dispatch.
+pub const MAX_REVIEW_OWNERSHIP_REFUNDS: u32 = 2 * MAX_REVIEW_PAID_ATTEMPTS;
 /// How long a job owner remains valid without a heartbeat.
-pub const REVIEW_OWNER_TTL_MS: i64 = 45_000;
+///
+/// Three minutes against a fifteen-second heartbeat, so a worker survives
+/// roughly 165 seconds of stall past a renewal before its local fence trips.
+/// It was 45 seconds until 2026-10-30, when a swap-thrashing shared host
+/// paused the server for up to 84 seconds at a time: about a quarter of all
+/// review runs over four days lost ownership 30-70 seconds into their lanes,
+/// before any model call, and each one spent a paid attempt. The cost of the
+/// longer lease is recovery latency after a genuine crash — a dead owner's job
+/// waits up to three minutes instead of 45 seconds before another process can
+/// claim it — which is small next to a review that can never finish.
+pub const REVIEW_OWNER_TTL_MS: i64 = 180_000;
 /// Short bounded owner claim for a queued status write, independent of review ownership.
 pub const QUEUE_STATUS_CLAIM_TTL_MS: i64 = 300_000;
 /// Bound active and detached check identities well below the BSON scheduler cap.
@@ -68,6 +81,16 @@ pub struct ReviewRequest {
     pub accepted_at_ms: i64,
 }
 
+impl ReviewRequest {
+    /// Whether a person explicitly asked for this review: the `@tinysweeper`
+    /// comment command. Pushes and redeliveries never are, so they cannot
+    /// re-arm a head that already failed terminally. Manual reviews are `Full`
+    /// and keep their own per-job budget, so they never needed re-arming.
+    pub fn is_explicit_rerequest(&self) -> bool {
+        self.mode == ReviewJobMode::Incremental && self.event == "issue_comment"
+    }
+}
+
 /// Atomic admission result for one webhook or an entire manual expansion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
@@ -83,7 +106,10 @@ pub enum Admission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaidStart {
     /// This owner may proceed to credentials and review work.
-    Started,
+    Started {
+        /// Paid-budget epoch the start was charged in; a refund must name it.
+        epoch: u64,
+    },
     /// The retry budget was exhausted; its owner can now conclude status and finish it.
     Exhausted,
     /// This process no longer owns the unexpired generation.
@@ -257,6 +283,9 @@ pub struct ScheduledReview {
     pub not_before_ms: i64,
     /// Paid-work starts consumed across process restarts.
     pub paid_attempts: u32,
+    /// Full-mode paid starts refunded after an ownership-fenced attempt.
+    #[serde(default)]
+    pub ownership_refunds: u32,
     /// New incremental delivery arrived while this owner was running. The
     /// owner keeps its global slot until it observes and acknowledges this.
     #[serde(default)]
@@ -313,6 +342,15 @@ pub struct IncrementalHeadBudget {
     pub head_sha: String,
     /// Paid starts consumed for this exact head across owners.
     pub paid_attempts: u32,
+    /// Paid starts refunded for this head after ownership-fenced attempts.
+    #[serde(default)]
+    pub ownership_refunds: u32,
+    /// Advances whenever this budget starts over — a confirmed head change or
+    /// an explicit re-request re-arming a failed head. A refund names the
+    /// epoch its start was charged in, so a late refund cannot return a start
+    /// charged against a budget that has since been reset.
+    #[serde(default)]
+    pub epoch: u64,
     /// Deadline exhaustion is terminal until an authoritative head change.
     pub deadline_hit: bool,
     /// The terminal result for this exact head, if it already has one.
@@ -870,6 +908,9 @@ impl ReviewSchedulerState {
             return Admission::Full;
         }
         for request in requests {
+            if request.is_explicit_rerequest() {
+                self.rearm_failed_head(&request.repo, request.number);
+            }
             let mut detached_checks = Vec::new();
             let initial_check = request.head_sha.as_ref().map(|head_sha| ReviewCheckRecord {
                 head_sha: head_sha.clone(),
@@ -946,6 +987,7 @@ impl ReviewSchedulerState {
                 owner_until_ms: 0,
                 not_before_ms: 0,
                 paid_attempts: 0,
+                ownership_refunds: 0,
                 yield_requested: false,
                 review_checks: initial_check.into_iter().collect(),
                 status_reconcile_reserved: true,
@@ -1027,6 +1069,44 @@ impl ReviewSchedulerState {
             {
                 record.head_history_reservations = Some(record.accepted_ids.len());
             }
+        }
+    }
+
+    /// Clear a failed terminal result from the pull request's last confirmed
+    /// head so an explicit re-request can review it again.
+    ///
+    /// Only `Exhausted` and `Deadline` are failures a person can reasonably
+    /// ask to retry; a `Published` or `Declined` head stays terminal, so a
+    /// comment still cannot buy a second paid review of a reviewed commit.
+    /// The head's paid budget starts over, as it would after a push.
+    ///
+    /// Every failed head in the pull request's history is cleared too, not
+    /// only the one the budget currently names. The comment is admitted
+    /// before any worker confirms which head is live, so after a force-push
+    /// back to an earlier failed head the budget still names the head that
+    /// replaced it; clearing only that one would let `confirm_head` restore the
+    /// earlier failure from history and silently skip the requested review.
+    /// Failed history is the only thing cleared, so a reviewed head stays
+    /// reviewed.
+    fn rearm_failed_head(&mut self, repo: &str, number: u64) {
+        let failed = |outcome: Option<TerminalOutcome>, deadline_hit: bool| match outcome {
+            Some(TerminalOutcome::Exhausted | TerminalOutcome::Deadline) => true,
+            None => deadline_hit,
+            Some(_) => false,
+        };
+        self.head_history.retain(|record| {
+            !(record.repo == repo && record.number == number && failed(Some(record.outcome), false))
+        });
+        if let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
+            budget.repo == repo
+                && budget.number == number
+                && failed(budget.terminal_outcome, budget.deadline_hit)
+        }) {
+            budget.terminal_outcome = None;
+            budget.deadline_hit = false;
+            budget.paid_attempts = 0;
+            budget.ownership_refunds = 0;
+            budget.epoch = budget.epoch.wrapping_add(1);
         }
     }
 
@@ -1136,13 +1216,69 @@ impl ReviewSchedulerState {
                 return PaidStart::Exhausted;
             }
             budget.paid_attempts += 1;
-            return PaidStart::Started;
+            return PaidStart::Started {
+                epoch: budget.epoch,
+            };
         }
         if self.unfinished[index].paid_attempts >= MAX_REVIEW_PAID_ATTEMPTS {
             return PaidStart::Exhausted;
         }
         self.unfinished[index].paid_attempts += 1;
-        PaidStart::Started
+        // A full review's per-job budget is never reset or re-armed, so it
+        // has a single epoch.
+        PaidStart::Started { epoch: 0 }
+    }
+
+    /// Return one paid start whose attempt ended at an ownership fence before
+    /// any model dispatch.
+    ///
+    /// The paid budget bounds what a head can cost across crash loops. An
+    /// attempt fenced before its first dispatch cost no model money, and on
+    /// 2026-10-30 host stalls produced exactly those attempts back to back
+    /// until heads exhausted without a single model call. Refunds need no
+    /// live ownership — losing it is why the attempt ended — but they only
+    /// touch the head and budget epoch that was charged, and stop at
+    /// [`MAX_REVIEW_OWNERSHIP_REFUNDS`] so a host that never stops stalling
+    /// still ends in a visible exhausted result rather than an endless job.
+    pub fn refund_paid(
+        &mut self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        epoch: u64,
+        _now_ms: i64,
+    ) -> bool {
+        let Some(record) = self
+            .unfinished
+            .iter_mut()
+            .find(|record| record.request.id == owned.request.id)
+        else {
+            return false;
+        };
+        let (paid_attempts, ownership_refunds) =
+            if record.request.mode == ReviewJobMode::Incremental {
+                let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
+                    budget.repo == record.request.repo
+                        && budget.number == record.request.number
+                        && budget.head_sha == head_sha
+                        && budget.epoch == epoch
+                        && budget.terminal_outcome.is_none()
+                        && !budget.deadline_hit
+                }) else {
+                    return false;
+                };
+                (&mut budget.paid_attempts, &mut budget.ownership_refunds)
+            } else {
+                if epoch != 0 {
+                    return false;
+                }
+                (&mut record.paid_attempts, &mut record.ownership_refunds)
+            };
+        if *paid_attempts == 0 || *ownership_refunds >= MAX_REVIEW_OWNERSHIP_REFUNDS {
+            return false;
+        }
+        *paid_attempts -= 1;
+        *ownership_refunds += 1;
+        true
     }
 
     /// Bind an owned incremental request to the authoritative live head. A
@@ -1212,6 +1348,8 @@ impl ReviewSchedulerState {
             } else {
                 0
             };
+            current.ownership_refunds = 0;
+            current.epoch = current.epoch.wrapping_add(1);
             current.deadline_hit = historical_deadline;
             current.terminal_outcome = historical_outcome;
             self.unfinished[index].request.head_sha = Some(head_sha.to_owned());
@@ -1228,6 +1366,8 @@ impl ReviewSchedulerState {
             // confirmation existed. Preserve that conservative count on the
             // first confirmed head; only a later confirmed transition resets it.
             paid_attempts: self.unfinished[index].paid_attempts,
+            ownership_refunds: 0,
+            epoch: 0,
             deadline_hit: false,
             terminal_outcome: None,
         });
@@ -1791,6 +1931,16 @@ pub trait ReviewJobStore: Send + Sync {
 
     /// Consume a paid attempt, retaining exhausted work until its owner concludes status.
     async fn begin_paid(&self, owned: &OwnedReview, now_ms: i64) -> Result<PaidStart>;
+
+    /// Return a paid start whose attempt was fenced before any model dispatch.
+    /// Needs no live ownership: the fence is usually why ownership is gone.
+    async fn refund_paid(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        epoch: u64,
+        now_ms: i64,
+    ) -> Result<bool>;
 
     /// Confirm the live head fetched from Forge after the review gate and lease.
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;

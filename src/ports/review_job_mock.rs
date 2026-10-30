@@ -19,6 +19,8 @@ pub struct MockReviewJobStore {
     fail_admission: Mutex<bool>,
     #[cfg(test)]
     should_continue_delay: Mutex<Option<std::time::Duration>>,
+    #[cfg(test)]
+    renew_delay: Mutex<Option<std::time::Duration>>,
 }
 
 impl MockReviewJobStore {
@@ -34,6 +36,12 @@ impl MockReviewJobStore {
             .should_continue_delay
             .lock()
             .expect("control-plane delay") = Some(delay);
+    }
+
+    /// Delay every heartbeat renewal to model a stalled host or store.
+    #[cfg(all(test, feature = "serve"))]
+    pub(crate) fn delay_renew(&self, delay: std::time::Duration) {
+        *self.renew_delay.lock().expect("renew delay") = Some(delay);
     }
 
     /// Return the number of pending or currently owned requests.
@@ -231,6 +239,20 @@ impl ReviewJobStore for MockReviewJobStore {
         Ok(self.state.lock().expect("state").begin_paid(owned, now_ms))
     }
 
+    async fn refund_paid(
+        &self,
+        owned: &OwnedReview,
+        head_sha: &str,
+        epoch: u64,
+        now_ms: i64,
+    ) -> Result<bool> {
+        Ok(self
+            .state
+            .lock()
+            .expect("state")
+            .refund_paid(owned, head_sha, epoch, now_ms))
+    }
+
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool> {
         Ok(self
             .state
@@ -261,6 +283,12 @@ impl ReviewJobStore for MockReviewJobStore {
     }
 
     async fn renew(&self, owned: &OwnedReview, now_ms: i64) -> Result<bool> {
+        #[cfg(test)]
+        let delay = *self.renew_delay.lock().expect("renew delay");
+        #[cfg(test)]
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(self.state.lock().expect("state").renew(owned, now_ms))
     }
 

@@ -1114,7 +1114,7 @@ async fn run_owned_review(
         owned.clone(),
         lost_tx,
         owner_until_tx,
-        std::time::Duration::from_secs(15),
+        REVIEW_HEARTBEAT_INTERVAL,
     );
 
     let request = &owned.request;
@@ -1306,6 +1306,15 @@ where
     }
 }
 
+/// What an exhausted head reports. Not `NotReviewed`: that conclusion is for a
+/// run that stopped deliberately, and on 2026-10-30 heads whose every attempt
+/// was lost to host stalls read "Not reviewed" with no lane checks, which looked
+/// like a decision rather than a failure. `ActionRequired` also keeps auto-merge
+/// from treating the missing review as consent.
+static EXHAUSTED_REVIEW: Error = Error::ReviewAttemptsExhausted {
+    attempts: crate::ports::review_job::MAX_REVIEW_PAID_ATTEMPTS,
+};
+
 async fn finalize_exhausted_review<CheckOwner, CheckOwnerFuture, Conclude, ConcludeFuture>(
     timing: &crate::review_timing::ReviewTiming,
     check_owner: CheckOwner,
@@ -1314,13 +1323,13 @@ async fn finalize_exhausted_review<CheckOwner, CheckOwnerFuture, Conclude, Concl
 where
     CheckOwner: FnOnce() -> CheckOwnerFuture,
     CheckOwnerFuture: std::future::Future<Output = Result<()>>,
-    Conclude: FnOnce() -> ConcludeFuture,
+    Conclude: FnOnce(Conclusion<'static>) -> ConcludeFuture,
     ConcludeFuture: std::future::Future<Output = ()>,
 {
     if check_owner().await.is_err() {
         return WorkerDisposition::OwnershipLost;
     }
-    conclude().await;
+    conclude(Conclusion::Failed(&EXHAUSTED_REVIEW)).await;
     timing.finish("failure");
     WorkerDisposition::Terminal(TerminalOutcome::Exhausted)
 }
@@ -1335,6 +1344,7 @@ enum PaidWork<T> {
     OwnershipLost,
 }
 
+#[cfg(test)]
 async fn with_paid_review_attempt<T, F, Fut>(
     store: &dyn ReviewJobStore,
     owned: &OwnedReview,
@@ -1345,8 +1355,23 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
+    with_charged_paid_review_attempt(store, owned, now_ms, |_epoch| work()).await
+}
+
+/// Charge one paid start, then run `work` with the budget epoch it was
+/// charged in — the epoch a later refund of this start has to name.
+async fn with_charged_paid_review_attempt<T, F, Fut>(
+    store: &dyn ReviewJobStore,
+    owned: &OwnedReview,
+    now_ms: i64,
+    work: F,
+) -> Result<PaidWork<T>>
+where
+    F: FnOnce(u64) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
     match store.begin_paid(owned, now_ms).await? {
-        PaidStart::Started => Ok(PaidWork::Started(work().await)),
+        PaidStart::Started { epoch } => Ok(PaidWork::Started(work(epoch).await)),
         PaidStart::Exhausted => Ok(PaidWork::Exhausted),
         PaidStart::OwnershipLost => Ok(PaidWork::OwnershipLost),
     }
@@ -1373,16 +1398,33 @@ fn spawn_review_heartbeat(
         loop {
             tokio::time::sleep(interval).await;
             let renewal_started = tokio::time::Instant::now();
-            match store.renew(&owned, unix_time_ms()).await {
+            let renewed = store.renew(&owned, unix_time_ms()).await;
+            let elapsed = renewal_started.elapsed();
+            // A slow renewal is the early warning for the stalls that used to
+            // cost whole reviews: it shows how close a worker came to its
+            // local fence while there is still time to act on the host.
+            if elapsed > SLOW_HEARTBEAT_RENEWAL {
+                tracing::warn!(
+                    job_id = %owned.request.id.0,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "slow review ownership heartbeat renewal"
+                );
+            }
+            match renewed {
                 Ok(true) => {
                     let _ = owner_until.send(conservative_owner_deadline(renewal_started));
                 }
                 Ok(false) => {
+                    tracing::warn!(
+                        job_id = %owned.request.id.0,
+                        generation = owned.generation,
+                        "review ownership lost: record replaced or expired"
+                    );
                     let _ = lost.send(true);
                     return;
                 }
                 Err(err) => {
-                    tracing::error!(%err, "could not renew durable review ownership");
+                    tracing::error!(%err, job_id = %owned.request.id.0, "could not renew durable review ownership");
                     let _ = lost.send(true);
                     return;
                 }
@@ -1391,10 +1433,27 @@ fn spawn_review_heartbeat(
     }))
 }
 
+/// How often a running review renews its durable owner lease.
+const REVIEW_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How far inside the durable owner TTL the local fence stops work. It absorbs
+/// clock skew between this process and the store that stamped the renewal.
+const LOCAL_OWNER_FENCE_MARGIN_MS: i64 = 10_000;
+
+/// A renewal slower than this is logged: it is a host or store stall eating
+/// into the owner lease, well before the stall is long enough to lose it.
+const SLOW_HEARTBEAT_RENEWAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+const _: () = assert!(
+    crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS
+        > 2 * REVIEW_HEARTBEAT_INTERVAL.as_millis() as i64,
+    "the local owner fence must outlast more than one missed heartbeat"
+);
+
 fn conservative_owner_deadline(started: tokio::time::Instant) -> tokio::time::Instant {
     started
         + std::time::Duration::from_millis(
-            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - 10_000) as u64,
+            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS) as u64,
         )
 }
 
@@ -2914,15 +2973,7 @@ where
     AfterCheck: FnOnce() -> AfterCheckFuture,
     AfterCheckFuture: std::future::Future<Output = ()>,
 {
-    let check = match conclusion {
-        Conclusion::Reviewed {
-            findings,
-            changes_requested,
-            coverage,
-        } => status::completed(&open.head_sha, findings, changes_requested, coverage),
-        Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
-        Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
-    };
+    let check = conclusion_check_run(&open.head_sha, &conclusion);
 
     let hub_body = match conclusion {
         Conclusion::Reviewed { .. } => None,
@@ -2948,6 +2999,22 @@ where
         _ => None,
     };
     (concluded, hub_updated)
+}
+
+/// The terminal umbrella check run for a decided conclusion.
+fn conclusion_check_run(
+    head_sha: &str,
+    conclusion: &Conclusion<'_>,
+) -> crate::forge::types::CheckRun {
+    match conclusion {
+        Conclusion::Reviewed {
+            findings,
+            changes_requested,
+            coverage,
+        } => status::completed(head_sha, *findings, *changes_requested, *coverage),
+        Conclusion::NotReviewed => status::not_reviewed(head_sha),
+        Conclusion::Failed(err) => failure::check_run(head_sha, err),
+    }
 }
 
 /// Create or migrate the durable hub before the first model call.
@@ -3392,7 +3459,7 @@ async fn handle_review(
                 return finalize_exhausted_review(
                     &timing,
                     || run.check_owner(&state),
-                    || async { close_status(&state, &slot, Conclusion::NotReviewed).await },
+                    |conclusion| async { close_status(&state, &slot, conclusion).await },
                 )
                 .await;
             }
@@ -3696,6 +3763,7 @@ where
     }
 }
 
+#[cfg(test)]
 async fn review_with_paid_budget_and_status<
     Start,
     StartFuture,
@@ -3719,6 +3787,35 @@ where
     Review: FnOnce() -> ReviewFuture,
     ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
 {
+    review_with_charged_paid_budget(store, owned, now_ms, |_epoch| start(), open_status, review)
+        .await
+}
+
+/// Open the status, charge the paid start, then review. `start` receives the
+/// charged budget epoch, or `None` for an unowned review that charges nothing.
+async fn review_with_charged_paid_budget<
+    Start,
+    StartFuture,
+    OpenStatus,
+    OpenStatusFuture,
+    Review,
+    ReviewFuture,
+>(
+    store: &dyn ReviewJobStore,
+    owned: Option<&OwnedReview>,
+    now_ms: i64,
+    start: Start,
+    open_status: OpenStatus,
+    review: Review,
+) -> Result<InnerReview>
+where
+    Start: FnOnce(Option<u64>) -> StartFuture,
+    StartFuture: std::future::Future<Output = Result<()>>,
+    OpenStatus: FnOnce() -> OpenStatusFuture,
+    OpenStatusFuture: std::future::Future<Output = Result<bool>>,
+    Review: FnOnce() -> ReviewFuture,
+    ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
+{
     // Open or resume the check before exhausting the paid-attempt budget. A
     // recovered job at the limit still needs a check to conclude, and shutdown
     // must defer without consuming a paid attempt.
@@ -3728,15 +3825,112 @@ where
     }
 
     if let Some(owned) = owned {
-        match with_paid_review_attempt(store, owned, now_ms, start).await? {
+        match with_charged_paid_review_attempt(store, owned, now_ms, |epoch| start(Some(epoch)))
+            .await?
+        {
             PaidWork::Started(result) => result?,
             PaidWork::Exhausted => return Ok(InnerReview::Exhausted),
             PaidWork::OwnershipLost => return Err(Error::ReviewOwnershipLost),
         }
     } else {
-        start().await?;
+        start(None).await?;
     }
     continue_after_open_status(true, review).await
+}
+
+/// Run one paid attempt, returning its paid start when an ownership fence
+/// ended it before any model dispatch.
+#[allow(clippy::too_many_arguments)]
+async fn review_with_refundable_paid_budget<
+    Start,
+    StartFuture,
+    OpenStatus,
+    OpenStatusFuture,
+    Review,
+    ReviewFuture,
+>(
+    store: &dyn ReviewJobStore,
+    owned: Option<&OwnedReview>,
+    head_sha: &str,
+    now_ms: i64,
+    execution: &crate::app::review_execution::ReviewExecution,
+    timing: &crate::review_timing::ReviewTiming,
+    start: Start,
+    open_status: OpenStatus,
+    review: Review,
+) -> Result<InnerReview>
+where
+    Start: FnOnce() -> StartFuture,
+    StartFuture: std::future::Future<Output = Result<()>>,
+    OpenStatus: FnOnce() -> OpenStatusFuture,
+    OpenStatusFuture: std::future::Future<Output = Result<bool>>,
+    Review: FnOnce() -> ReviewFuture,
+    ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
+{
+    // `start` only runs once `begin_paid` has charged this attempt, so it is
+    // where a charge becomes refundable; a fence before the charge refunds
+    // nothing. The epoch binds the refund to the budget it was charged
+    // against: a re-request that re-arms the head in between opens a new
+    // epoch, and a late refund must not return one of its starts.
+    let charged_epoch = std::sync::Mutex::new(None);
+    let calls_before = model_calls_dispatched(execution, timing);
+    let result = review_with_charged_paid_budget(
+        store,
+        owned,
+        now_ms,
+        |epoch| {
+            *charged_epoch.lock().expect("charged epoch") = epoch;
+            start()
+        },
+        open_status,
+        review,
+    )
+    .await;
+    // Only cancellation by an ownership or supersession fence qualifies:
+    // every `execution.cancel()` is one. An ordinary failure is charged even
+    // without a model call, because that is the crash loop the budget bounds.
+    // `ReviewSuperseded` is matched directly because `check_work` returns it
+    // before anything cancels the scope: a stale hint can supersede a worker
+    // whose successor confirms the same head, and charging that would drain
+    // the head's budget with no model call made.
+    let fenced = match &result {
+        Err(Error::ReviewOwnershipLost | Error::ReviewSuperseded) => true,
+        Err(_) => execution.is_cancelled(),
+        Ok(_) => false,
+    };
+    let charged_epoch = *charged_epoch.lock().expect("charged epoch");
+    if let Some(owned) = owned
+        && fenced
+        && let Some(epoch) = charged_epoch
+        && model_calls_dispatched(execution, timing) == calls_before
+    {
+        match store
+            .refund_paid(owned, head_sha, epoch, unix_time_ms())
+            .await
+        {
+            Ok(true) => tracing::info!(
+                job_id = %owned.request.id.0,
+                "refunded a paid attempt fenced before any model call"
+            ),
+            Ok(false) => {}
+            Err(err) => tracing::warn!(
+                %err, job_id = %owned.request.id.0,
+                "could not refund a paid attempt fenced before any model call"
+            ),
+        }
+    }
+    result
+}
+
+/// Every model dispatch this worker has made, by either count. The execution
+/// scope sees physical dispatches; the timing record also sees logical calls
+/// from adapters without physical dispatch hooks. Either moving means money
+/// may have been spent.
+fn model_calls_dispatched(
+    execution: &crate::app::review_execution::ReviewExecution,
+    timing: &crate::review_timing::ReviewTiming,
+) -> u64 {
+    (execution.snapshot().committed_calls as u64).saturating_add(timing.snapshot().calls_attempted)
 }
 
 fn review_lease(repo: &str, number: u64, mode: Mode, head: Option<&str>) -> String {
@@ -3939,10 +4133,13 @@ impl ReviewRun<'_> {
                 // this function exists to conclude. The forge calls here are bounded on
                 // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
                 // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
-                review_with_paid_budget_and_status(
+                review_with_refundable_paid_budget(
             state.review_jobs.as_ref(),
             run.owned.as_ref(),
+            &pull_request.head_sha,
             unix_time_ms(),
+            &run.execution.execution(),
+            &run.timing,
             || async {
                 run.check_work(state).await?;
                 if let Some(backend) = &state.index {
@@ -4881,6 +5078,10 @@ impl Previews for PreviewDispatch {
 }
 
 #[cfg(test)]
+#[path = "routes_ownership_test.rs"]
+mod ownership_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -5463,7 +5664,14 @@ mod tests {
     #[test]
     fn a_slow_renewal_cannot_extend_the_local_deadline_from_its_response_time() {
         let response_time = tokio::time::Instant::now();
-        let renewal_started = response_time - std::time::Duration::from_secs(40);
+        // One second longer than the local fence allows, whatever the TTL is.
+        let renewal_took = std::time::Duration::from_millis(
+            (crate::ports::review_job::REVIEW_OWNER_TTL_MS - LOCAL_OWNER_FENCE_MARGIN_MS + 1_000)
+                as u64,
+        );
+        let renewal_started = response_time
+            .checked_sub(renewal_took)
+            .expect("the test host has been up longer than one owner lease");
         assert!(
             conservative_owner_deadline(renewal_started) <= response_time,
             "a renewal response after the safety margin must not permit more model work"
@@ -5542,7 +5750,7 @@ mod tests {
                 .begin_paid(&replacement, unix_time_ms())
                 .await
                 .unwrap(),
-            crate::ports::review_job::PaidStart::Started
+            crate::ports::review_job::PaidStart::Started { .. }
         ));
         assert!(
             store
@@ -5681,10 +5889,10 @@ mod tests {
         seed_previously_published_queue_checks(&*store, now).await;
         let owned = store.claim_next("old-worker", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned, "head-a", now + 1).await.unwrap());
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
 
         let mut next = first;
         next.id = crate::ports::review_job::ReviewJobId("push-b-budget-race".into());
@@ -5868,10 +6076,10 @@ mod tests {
             .unwrap();
         assert_eq!(owned.accepted_ids.len(), 3);
         assert!(store.confirm_head(&owned, "head-c", now + 5).await.unwrap());
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned, now + 6).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
 
         let model = MockModel::silent();
         let forge = MockForge::new();
@@ -5988,10 +6196,10 @@ mod tests {
         let owned_a = store.claim_next("worker-a", now).await.unwrap().unwrap();
         assert!(store.confirm_head(&owned_a, "head-a", now).await.unwrap());
         let owned_a_for_status = owned_a.clone();
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned_a, now + 1).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
 
         let a_dropped = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(CallTracker {
@@ -6135,10 +6343,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned_b, unix_time_ms()).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         let repo = RepoId::parse("owner/repo").unwrap();
         let queued_b = forge
             .writes()
@@ -6293,10 +6501,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&newer, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         let forge = MockForge::new();
         let model = MockModel::silent();
         let repo_id = RepoId::parse("owner/repo").unwrap();
@@ -6471,10 +6679,10 @@ mod tests {
         else {
             panic!("the first delivery's queued check was published");
         };
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned, now + 3).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         let open = ReviewStatus {
             repo: repo.clone(),
             check_id: check.check_id.expect("published check id"),
@@ -8129,10 +8337,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&active, now + 2).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
 
         // The prior model attempt failed transiently. A delivery arrives during
         // its backoff, so the next handle_review attempt boundary sees the yield.
@@ -8208,7 +8416,7 @@ mod tests {
         assert!(!store.head_is_terminal(&resumed, now + 8).await.unwrap());
         assert_eq!(
             store.begin_paid(&resumed, now + 9).await.unwrap(),
-            PaidStart::Started,
+            PaidStart::Started { epoch: 0 },
             "a delivery hint during backoff must not mark B exhausted"
         );
         let model = MockModel::silent();
@@ -8619,11 +8827,14 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
-                forge
-                    .update_check(&repo, check_id, status::not_reviewed("sha-7"))
-                    .await
-                    .expect("conclude the open check");
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
+                    forge
+                        .update_check(repo, check_id, conclusion_check_run("sha-7", &conclusion))
+                        .await
+                        .expect("conclude the open check");
+                }
             },
         )
         .await;
@@ -8660,7 +8871,8 @@ mod tests {
         assert_eq!(conclusions.len(), 1, "the open status is concluded once");
         assert_eq!(
             conclusions[0].conclusion,
-            Some(crate::forge::CheckConclusion::Neutral)
+            Some(crate::forge::CheckConclusion::ActionRequired),
+            "exhaustion is a visible failure, not a deliberate skip"
         );
         let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let writer_bytes = bytes.clone();
@@ -8756,11 +8968,14 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
-                forge
-                    .update_check(&repo, check_id, status::not_reviewed("sha-8"))
-                    .await
-                    .expect("conclude fresh recovery check");
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
+                    forge
+                        .update_check(repo, check_id, conclusion_check_run("sha-8", &conclusion))
+                        .await
+                        .expect("conclude fresh recovery check");
+                }
             },
         )
         .await;
@@ -8788,7 +9003,8 @@ mod tests {
         assert_eq!(checks[0].conclusion, None);
         assert_eq!(
             checks[1].conclusion,
-            Some(crate::forge::CheckConclusion::Neutral)
+            Some(crate::forge::CheckConclusion::ActionRequired),
+            "exhaustion is a visible failure, not a deliberate skip"
         );
         assert_eq!(model_starts.load(Ordering::SeqCst), 0);
     }
@@ -8893,11 +9109,18 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
-                forge
-                    .update_check(&repo, stale_check_id, status::not_reviewed("sha-9"))
-                    .await
-                    .expect("stale close is rejected before reaching the forge");
+            |conclusion| {
+                let (forge, repo) = (&forge, &repo);
+                async move {
+                    forge
+                        .update_check(
+                            repo,
+                            stale_check_id,
+                            conclusion_check_run("sha-9", &conclusion),
+                        )
+                        .await
+                        .expect("stale close is rejected before reaching the forge");
+                }
             },
         )
         .await;
@@ -9665,10 +9888,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owned, now + 3).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .check_transition_current(&owned, "same-id-head", queued_id, now + 4)
@@ -9824,10 +10047,10 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&owner, 14).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .finish(&owner, TerminalOutcome::Exhausted, 20, 20)
@@ -11149,10 +11372,10 @@ mod tests {
             "the Full job stays queued while the one shared worker slot is occupied"
         );
 
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&incremental, now_ms + 5).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         assert!(
             store
                 .finish(
@@ -11177,10 +11400,10 @@ mod tests {
         assert_eq!(full.request.mode, ReviewJobMode::Full);
         assert_eq!(full.request.head_sha.as_deref(), Some("abc123"));
         confirm_test_head(store.as_ref(), &full, now_ms + 9).await;
-        assert_eq!(
+        assert!(matches!(
             store.begin_paid(&full, now_ms + 10).await.unwrap(),
-            PaidStart::Started
-        );
+            PaidStart::Started { .. }
+        ));
         let incrementals = store.snapshot_for_test().incremental_heads;
         assert!(
             incrementals.iter().any(|head| {
