@@ -33,7 +33,12 @@ async fn acknowledge_queued_checks(store: &dyn ReviewJobStore, now_ms: i64) {
         if check.retired {
             continue;
         }
-        assert!(store.mark_queue_post_attempted(&check, now_ms).await.unwrap());
+        assert!(
+            store
+                .mark_queue_post_attempted(&check, now_ms)
+                .await
+                .unwrap()
+        );
         assert!(
             store
                 .record_queued_check_id(
@@ -200,7 +205,12 @@ fn cancelled_by_owner_fence() -> Error {
 }
 
 /// One claimed generation of the accepted job with its head confirmed.
-async fn next_owner(store: &MockReviewJobStore, owner: &str, number: u64, now_ms: i64) -> OwnedReview {
+async fn next_owner(
+    store: &MockReviewJobStore,
+    owner: &str,
+    number: u64,
+    now_ms: i64,
+) -> OwnedReview {
     acknowledge_queued_checks(store, now_ms).await;
     let owned = store
         .claim_next(owner, now_ms)
@@ -274,7 +284,10 @@ async fn ownership_lost_before_any_model_call_does_not_spend_the_paid_budget() {
         matches!(reviewed, InnerReview::Complete(_)),
         "fenced attempts without a model call left budget for this run"
     );
-    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        1
+    );
 }
 
 #[tokio::test]
@@ -302,7 +315,10 @@ async fn an_attempt_fenced_after_a_model_call_still_spends_its_paid_start() {
     )
     .await;
     assert!(matches!(result, Err(Error::ReviewOwnershipLost)));
-    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        1
+    );
 }
 
 #[tokio::test]
@@ -326,7 +342,10 @@ async fn an_ordinary_failure_before_any_model_call_still_spends_its_paid_start()
     )
     .await;
     assert!(result.is_err());
-    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        1
+    );
 }
 
 #[tokio::test]
@@ -354,7 +373,8 @@ async fn an_exhausted_head_concludes_its_umbrella_check_as_a_visible_failure() {
         &timing,
         || async { Ok(()) },
         |conclusion| async {
-            let (check, _) = conclude_status_with_writer(&open, conclusion, &forge, || async {}).await;
+            let (check, _) =
+                conclude_status_with_writer(&open, conclusion, &forge, || async {}).await;
             check.expect("the open check is concluded");
         },
     )
@@ -368,7 +388,10 @@ async fn an_exhausted_head_concludes_its_umbrella_check_as_a_visible_failure() {
         .writes()
         .into_iter()
         .find_map(|write| match write {
-            Write::CheckUpdate { check_id: id, check } if id == check_id => Some(check),
+            Write::CheckUpdate {
+                check_id: id,
+                check,
+            } if id == check_id => Some(check),
             _ => None,
         })
         .expect("the umbrella check is concluded in place");
@@ -397,15 +420,24 @@ fn forge_status_clients(forge: crate::forge::MockForge) -> QueueStatusClientFact
 /// Spend every paid start on `sha-{number}` and record the head Exhausted,
 /// as five fenced or failed attempts in production would.
 async fn exhaust_head(store: &MockReviewJobStore, number: u64) -> i64 {
-    store.admit_batch(vec![stalled_review(number)]).await.unwrap();
+    store
+        .admit_batch(vec![stalled_review(number)])
+        .await
+        .unwrap();
     let mut now_ms = unix_time_ms();
     for generation in 0..crate::ports::review_job::MAX_REVIEW_PAID_ATTEMPTS {
         let owned = next_owner(store, &format!("spent-{generation}"), number, now_ms).await;
-        assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started);
+        assert_eq!(
+            store.begin_paid(&owned, now_ms).await.unwrap(),
+            PaidStart::Started
+        );
         now_ms += crate::ports::review_job::REVIEW_OWNER_TTL_MS + 1;
     }
     let owned = next_owner(store, "exhausted", number, now_ms).await;
-    assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Exhausted);
+    assert_eq!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Exhausted
+    );
     assert!(
         store
             .finish(&owned, TerminalOutcome::Exhausted, now_ms, now_ms)
@@ -472,7 +504,10 @@ async fn a_comment_rerequest_on_an_exhausted_head_is_admitted_and_reviewed() {
         ReconciledReviewCheck::Ready(_)
     ));
     assert!(!store.head_is_terminal(&owned, now_ms).await.unwrap());
-    assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started);
+    assert_eq!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Started
+    );
 }
 
 #[tokio::test]
@@ -483,7 +518,10 @@ async fn a_comment_on_a_published_head_still_does_not_rereview_it() {
     store.admit_batch(vec![stalled_review(49)]).await.unwrap();
     let now_ms = unix_time_ms();
     let owned = next_owner(&store, "publisher", 49, now_ms).await;
-    assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started);
+    assert_eq!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Started
+    );
     assert!(
         store
             .finish(&owned, TerminalOutcome::Published, now_ms, now_ms)
@@ -494,7 +532,10 @@ async fn a_comment_on_a_published_head_still_does_not_rereview_it() {
     comment.id = crate::ports::review_job::ReviewJobId("webhook:comment-49".into());
     comment.head_sha = Some("sha-49".into());
     comment.event = "issue_comment".into();
-    assert_eq!(store.admit_batch(vec![comment]).await.unwrap(), Admission::Admitted);
+    assert_eq!(
+        store.admit_batch(vec![comment]).await.unwrap(),
+        Admission::Admitted
+    );
     let owned = store
         .claim_next("commenter", now_ms)
         .await

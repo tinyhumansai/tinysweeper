@@ -2969,7 +2969,10 @@ where
 }
 
 /// The terminal umbrella check run for a decided conclusion.
-fn conclusion_check_run(head_sha: &str, conclusion: &Conclusion<'_>) -> crate::forge::types::CheckRun {
+fn conclusion_check_run(
+    head_sha: &str,
+    conclusion: &Conclusion<'_>,
+) -> crate::forge::types::CheckRun {
     match conclusion {
         Conclusion::Reviewed {
             findings,
@@ -8735,10 +8738,11 @@ mod tests {
             |conclusion| {
                 let (forge, repo) = (&forge, &repo);
                 async move {
-                forge
-                    .update_check(repo, check_id, conclusion_check_run("sha-7", &conclusion))
-                    .await
-                    .expect("conclude the open check");
+                    forge
+                        .update_check(repo, check_id, conclusion_check_run("sha-7", &conclusion))
+                        .await
+                        .expect("conclude the open check");
+                }
             },
         )
         .await;
@@ -8874,10 +8878,11 @@ mod tests {
             |conclusion| {
                 let (forge, repo) = (&forge, &repo);
                 async move {
-                forge
-                    .update_check(repo, check_id, conclusion_check_run("sha-8", &conclusion))
-                    .await
-                    .expect("conclude fresh recovery check");
+                    forge
+                        .update_check(repo, check_id, conclusion_check_run("sha-8", &conclusion))
+                        .await
+                        .expect("conclude fresh recovery check");
+                }
             },
         )
         .await;
@@ -9013,10 +9018,15 @@ mod tests {
             |conclusion| {
                 let (forge, repo) = (&forge, &repo);
                 async move {
-                forge
-                    .update_check(repo, stale_check_id, conclusion_check_run("sha-9", &conclusion))
-                    .await
-                    .expect("stale close is rejected before reaching the forge");
+                    forge
+                        .update_check(
+                            repo,
+                            stale_check_id,
+                            conclusion_check_run("sha-9", &conclusion),
+                        )
+                        .await
+                        .expect("stale close is rejected before reaching the forge");
+                }
             },
         )
         .await;

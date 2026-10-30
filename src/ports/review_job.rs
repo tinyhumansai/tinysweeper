@@ -1858,8 +1858,7 @@ pub trait ReviewJobStore: Send + Sync {
 
     /// Return a paid start whose attempt was fenced before any model dispatch.
     /// Needs no live ownership: the fence is usually why ownership is gone.
-    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64)
-    -> Result<bool>;
+    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;
 
     /// Confirm the live head fetched from Forge after the review gate and lease.
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;

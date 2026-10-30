@@ -1367,7 +1367,10 @@ async fn tombstone_reservations_backpressure_without_evicting_live_dedupe_ids() 
 #[tokio::test]
 async fn a_sixty_second_stall_after_a_missed_heartbeat_keeps_ownership() {
     let store = MockReviewJobStore::default();
-    store.admit_batch(vec![request("stalled", 1)]).await.unwrap();
+    store
+        .admit_batch(vec![request("stalled", 1)])
+        .await
+        .unwrap();
     let owned = claim_after_queue_ack(&store, "process-a", 2)
         .await
         .unwrap()
@@ -1388,7 +1391,11 @@ async fn a_sixty_second_stall_after_a_missed_heartbeat_keeps_ownership() {
 
 /// Claim the next generation of the one accepted job once its previous owner
 /// lapsed, and confirm the head the fixture request was admitted with.
-async fn reclaim_and_confirm(store: &MockReviewJobStore, owner: &str, now_ms: i64) -> super::OwnedReview {
+async fn reclaim_and_confirm(
+    store: &MockReviewJobStore,
+    owner: &str,
+    now_ms: i64,
+) -> super::OwnedReview {
     let owned = claim_after_queue_ack(store, owner, now_ms)
         .await
         .unwrap()
@@ -1402,11 +1409,17 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
     use super::{MAX_REVIEW_OWNERSHIP_REFUNDS, MAX_REVIEW_PAID_ATTEMPTS, PaidStart};
 
     let store = MockReviewJobStore::default();
-    store.admit_batch(vec![request("refunds", 1)]).await.unwrap();
+    store
+        .admit_batch(vec![request("refunds", 1)])
+        .await
+        .unwrap();
     let mut now_ms = 2;
     for generation in 0..MAX_REVIEW_OWNERSHIP_REFUNDS {
         let owned = reclaim_and_confirm(&store, &format!("owner-{generation}"), now_ms).await;
-        assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started);
+        assert_eq!(
+            store.begin_paid(&owned, now_ms).await.unwrap(),
+            PaidStart::Started
+        );
         now_ms += REVIEW_OWNER_TTL_MS + 1;
         // The owner has already lapsed: a refund does not need live ownership.
         assert!(store.refund_paid(&owned, "sha", now_ms).await.unwrap());
@@ -1419,12 +1432,18 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
     // never stops stalling still ends in a visible exhausted result.
     for generation in 0..MAX_REVIEW_PAID_ATTEMPTS {
         let owned = reclaim_and_confirm(&store, &format!("capped-{generation}"), now_ms).await;
-        assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Started);
+        assert_eq!(
+            store.begin_paid(&owned, now_ms).await.unwrap(),
+            PaidStart::Started
+        );
         assert!(!store.refund_paid(&owned, "sha", now_ms).await.unwrap());
         now_ms += REVIEW_OWNER_TTL_MS + 1;
     }
     let owned = reclaim_and_confirm(&store, "exhausted", now_ms).await;
-    assert_eq!(store.begin_paid(&owned, now_ms).await.unwrap(), PaidStart::Exhausted);
+    assert_eq!(
+        store.begin_paid(&owned, now_ms).await.unwrap(),
+        PaidStart::Exhausted
+    );
 }
 
 #[tokio::test]
@@ -1434,7 +1453,13 @@ async fn a_refund_for_a_head_that_is_no_longer_current_changes_nothing() {
     let store = MockReviewJobStore::default();
     store.admit_batch(vec![request("moved", 1)]).await.unwrap();
     let owned = reclaim_and_confirm(&store, "owner", 2).await;
-    assert_eq!(store.begin_paid(&owned, 2).await.unwrap(), PaidStart::Started);
+    assert_eq!(
+        store.begin_paid(&owned, 2).await.unwrap(),
+        PaidStart::Started
+    );
     assert!(!store.refund_paid(&owned, "other-sha", 3).await.unwrap());
-    assert_eq!(store.snapshot_for_test().incremental_heads[0].paid_attempts, 1);
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        1
+    );
 }
