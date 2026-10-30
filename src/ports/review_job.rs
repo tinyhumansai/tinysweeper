@@ -1167,8 +1167,44 @@ impl ReviewSchedulerState {
 
     /// Return one paid start whose attempt ended at an ownership fence before
     /// any model dispatch.
-    pub fn refund_paid(&mut self, _owned: &OwnedReview, _head_sha: &str, _now_ms: i64) -> bool {
-        false
+    ///
+    /// The paid budget bounds what a head can cost across crash loops. An
+    /// attempt fenced before its first dispatch cost no model money, and on
+    /// 2026-10-30 host stalls produced exactly those attempts back to back
+    /// until heads exhausted without a single model call. Refunds need no
+    /// live ownership — losing it is why the attempt ended — but they only
+    /// touch the head that was charged, and stop at
+    /// [`MAX_REVIEW_OWNERSHIP_REFUNDS`] so a host that never stops stalling
+    /// still ends in a visible exhausted result rather than an endless job.
+    pub fn refund_paid(&mut self, owned: &OwnedReview, head_sha: &str, _now_ms: i64) -> bool {
+        let Some(record) = self
+            .unfinished
+            .iter_mut()
+            .find(|record| record.request.id == owned.request.id)
+        else {
+            return false;
+        };
+        let (paid_attempts, ownership_refunds) =
+            if record.request.mode == ReviewJobMode::Incremental {
+                let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
+                    budget.repo == record.request.repo
+                        && budget.number == record.request.number
+                        && budget.head_sha == head_sha
+                        && budget.terminal_outcome.is_none()
+                        && !budget.deadline_hit
+                }) else {
+                    return false;
+                };
+                (&mut budget.paid_attempts, &mut budget.ownership_refunds)
+            } else {
+                (&mut record.paid_attempts, &mut record.ownership_refunds)
+            };
+        if *paid_attempts == 0 || *ownership_refunds >= MAX_REVIEW_OWNERSHIP_REFUNDS {
+            return false;
+        }
+        *paid_attempts -= 1;
+        *ownership_refunds += 1;
+        true
     }
 
     /// Bind an owned incremental request to the authoritative live head. A
@@ -1238,6 +1274,7 @@ impl ReviewSchedulerState {
             } else {
                 0
             };
+            current.ownership_refunds = 0;
             current.deadline_hit = historical_deadline;
             current.terminal_outcome = historical_outcome;
             self.unfinished[index].request.head_sha = Some(head_sha.to_owned());

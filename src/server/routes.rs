@@ -3784,8 +3784,60 @@ where
     Review: FnOnce() -> ReviewFuture,
     ReviewFuture: std::future::Future<Output = Result<InnerReview>>,
 {
-    let _ = (head_sha, execution, timing);
-    review_with_paid_budget_and_status(store, owned, now_ms, start, open_status, review).await
+    // `start` only runs once `begin_paid` has charged this attempt, so it is
+    // where a charge becomes refundable; a fence before the charge refunds
+    // nothing.
+    let charged = std::sync::atomic::AtomicBool::new(false);
+    let calls_before = model_calls_dispatched(execution, timing);
+    let result = review_with_paid_budget_and_status(
+        store,
+        owned,
+        now_ms,
+        || {
+            charged.store(true, std::sync::atomic::Ordering::SeqCst);
+            start()
+        },
+        open_status,
+        review,
+    )
+    .await;
+    // Only cancellation by an ownership or supersession fence qualifies:
+    // every `execution.cancel()` is one. An ordinary failure is charged even
+    // without a model call, because that is the crash loop the budget bounds.
+    let fenced = match &result {
+        Err(Error::ReviewOwnershipLost) => true,
+        Err(_) => execution.is_cancelled(),
+        Ok(_) => false,
+    };
+    if let Some(owned) = owned
+        && fenced
+        && charged.load(std::sync::atomic::Ordering::SeqCst)
+        && model_calls_dispatched(execution, timing) == calls_before
+    {
+        match store.refund_paid(owned, head_sha, unix_time_ms()).await {
+            Ok(true) => tracing::info!(
+                job_id = %owned.request.id.0,
+                "refunded a paid attempt fenced before any model call"
+            ),
+            Ok(false) => {}
+            Err(err) => tracing::warn!(
+                %err, job_id = %owned.request.id.0,
+                "could not refund a paid attempt fenced before any model call"
+            ),
+        }
+    }
+    result
+}
+
+/// Every model dispatch this worker has made, by either count. The execution
+/// scope sees physical dispatches; the timing record also sees logical calls
+/// from adapters without physical dispatch hooks. Either moving means money
+/// may have been spent.
+fn model_calls_dispatched(
+    execution: &crate::app::review_execution::ReviewExecution,
+    timing: &crate::review_timing::ReviewTiming,
+) -> u64 {
+    (execution.snapshot().committed_calls as u64).saturating_add(timing.snapshot().calls_attempted)
 }
 
 fn review_lease(repo: &str, number: u64, mode: Mode, head: Option<&str>) -> String {
@@ -3988,10 +4040,13 @@ impl ReviewRun<'_> {
                 // this function exists to conclude. The forge calls here are bounded on
                 // their own by `forge::github::REQUEST_TIMEOUT`, which is what the margin
                 // between `REVIEW_DEADLINE` and `LEASE_TTL` is for.
-                review_with_paid_budget_and_status(
+                review_with_refundable_paid_budget(
             state.review_jobs.as_ref(),
             run.owned.as_ref(),
+            &pull_request.head_sha,
             unix_time_ms(),
+            &run.execution.execution(),
+            &run.timing,
             || async {
                 run.check_work(state).await?;
                 if let Some(backend) = &state.index {
