@@ -616,9 +616,9 @@ mod tests {
             .expect("first checkout creates the mirror");
         let second_revision = push_new_head(fixture.path(), &remote);
         let mirror = cache_root.join("acme/widgets.git");
-        let stale = crate::indexer::fetch::GIT_TIMEOUT
-            + crate::indexer::fetch::GIT_TERMINATION_GRACE
-            + std::time::Duration::from_secs(60);
+        // A minute past the timeout: well beyond the few seconds of
+        // termination grace a timed-out git is given on top of it.
+        let stale = crate::indexer::fetch::GIT_TIMEOUT + std::time::Duration::from_secs(60);
         for lock in MIRROR_LOCKS {
             write_lock(&mirror.join(lock), stale);
         }
