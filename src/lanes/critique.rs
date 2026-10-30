@@ -1182,8 +1182,16 @@ fn helper() {
         file_contents: &BTreeMap<String, String>,
         retrieval_status: crate::retrieve::RetrievalStatus,
     ) -> LaneOutcome {
-        run_with_context_and_tree(model, config, diffs, file_contents, retrieval_status, "", None)
-            .await
+        run_with_context_and_tree(
+            model,
+            config,
+            diffs,
+            file_contents,
+            retrieval_status,
+            "",
+            None,
+        )
+        .await
     }
 
     async fn run_with_context_and_tree(
@@ -1347,7 +1355,8 @@ fn helper() {
     }
 
     /// Context the retrieval layer would render for the claim's caller.
-    const RENDERED_CALLER: &str = "### src/caller.rs (lines 1-3)\n```rust\nfn caller() { main(); }\n```\n";
+    const RENDERED_CALLER: &str =
+        "### src/caller.rs (lines 1-3)\n```rust\nfn caller() { main(); }\n```\n";
 
     #[tokio::test]
     async fn a_stale_index_neither_caps_confidence_nor_marks_the_lane_context_degraded() {
