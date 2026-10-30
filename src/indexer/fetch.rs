@@ -1488,6 +1488,48 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn a_process_group_that_ignores_sigterm_is_killed_once_the_grace_runs_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("helper.pid");
+        // Ignored signals stay ignored across exec, so the helper ignores
+        // SIGTERM too: only SIGKILL to the group stops either of them.
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "trap '' TERM; sleep 60 & echo $! > {helper}.tmp; mv {helper}.tmp {helper}; wait",
+                helper = helper.display()
+            ))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let helper = helper_pid(&helper).await;
+
+        let grace = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        stop_git_process_group(&mut child, grace).await.unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait())
+            .await
+            .expect("the leader is killed, not left running")
+            .unwrap();
+
+        assert!(!status.success());
+        assert!(
+            started.elapsed() >= grace,
+            "SIGKILL must wait out the grace"
+        );
+        eventually("the helper is killed with its group", || {
+            process_is_gone(helper)
+        })
+        .await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn dropping_a_running_git_command_terminates_its_whole_process_group() {
         // The production path: a review cancelled mid-fetch drops the future
         // running `git fetch`. kill_on_drop alone SIGKILLs git and orphans
