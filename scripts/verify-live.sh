@@ -32,10 +32,11 @@
 # there, never copied off the box.
 set -euo pipefail
 
-# The default set covers each failure seen on 2026-10-30: findings withheld
-# behind a stale index (8495, 8496), large PRs that ended "Not reviewed"
-# (8425, 8460, 8477), large-budget omissions (8511) and small controls.
-DEFAULT_PRS=(8495 8496 8425 8460 8477 8511 8510 8494)
+# The default set covers each failure seen on 2026-10-30 that is still open:
+# findings withheld behind a stale index (8495), a large PR that ended "Not
+# reviewed" (8425), large-budget omissions (8511) and small controls. Merged
+# PRs are skipped by both tiers' callers; add `--newest N` for fresh traffic.
+DEFAULT_PRS=(8495 8425 8511 8510 8494)
 
 die() { echo "verify-live: $*" >&2; exit 2; }
 need() { command -v "$1" >/dev/null || die "needs $1"; }
@@ -127,7 +128,6 @@ run_canary() {
   local pid z0
   pid=$(remote "docker inspect tinysweeper-tinysweeper-1 --format '{{.State.Pid}}'")
   z0=$(remote "ps -eo ppid=,stat= | awk -v p=$pid '\$1==p && \$2~/Z/' | wc -l")
-  echo "canary: queueing ${#prs[@]} manual reviews on $repo via $host (zombies under server: $z0)"
   # Only open, non-draft PRs can be reviewed; a merged one is declined in a
   # second and would read as a "Not reviewed" failure that says nothing about
   # the server. Heads are resolved before anything is queued, so no review is
@@ -140,6 +140,7 @@ run_canary() {
   done
   [ ${#open[@]} -gt 0 ] || die "no open pull request in the set"
   prs=("${open[@]}")
+  echo "canary: queueing ${#prs[@]} manual reviews on $repo via $host (zombies under server: $z0)"
 
   # The admin route admits a manual review only while a review slot is free
   # and answers 503 otherwise, so a burst larger than `review_concurrency`
