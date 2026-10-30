@@ -55,7 +55,11 @@ use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend, Usage};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
-/// Confidence ceiling for critique model findings when retrieval is degraded.
+/// Confidence ceiling for critique model findings reviewed with no repository
+/// context ([`RetrievalStatus::lacks_context`](crate::retrieve::RetrievalStatus::lacks_context)).
+///
+/// Below the default `confidence_min`, so a capped finding can never pass the
+/// posting gate on its own.
 const DEGRADED_CONTEXT_CONFIDENCE_CAP: f64 = 0.7;
 
 /// The correctness lane.
@@ -222,7 +226,7 @@ impl Critique {
         if let Some(skipped) = prepared.skipped {
             return Ok(skipped);
         }
-        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.context_degraded = input.retrieval_status.lacks_context();
         outcome.spend.merge(llm.spend());
         outcome.include_reviewed_paths(prepared.covered_without_model);
         if let Some(substitution) = &prepared.mechanical {
@@ -324,7 +328,7 @@ impl Critique {
         // rather than per file: `llm` is shared across the fan-out, so adding
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
-        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.context_degraded = input.retrieval_status.lacks_context();
         outcome.include_reviewed_paths(covered_without_model);
         outcome.spend.merge(llm.spend());
         if let Some(sub) = &mechanical {
@@ -715,7 +719,7 @@ async fn review_group(
     // in their confidence badge without allowing unsupported repository-wide
     // claims to drive a check verdict or inline comment. Scanners have their
     // own evidence and are outside this model-finding gate.
-    if input.retrieval_status.is_degraded() {
+    if input.retrieval_status.lacks_context() {
         capped_for_degraded_context = findings.len();
         for finding in &mut findings {
             finding.confidence = finding.confidence.min(DEGRADED_CONTEXT_CONFIDENCE_CAP);
