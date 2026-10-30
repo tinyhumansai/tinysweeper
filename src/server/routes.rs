@@ -4863,6 +4863,10 @@ impl Previews for PreviewDispatch {
 }
 
 #[cfg(test)]
+#[path = "routes_ownership_test.rs"]
+mod ownership_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
