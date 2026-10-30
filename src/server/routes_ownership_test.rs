@@ -291,6 +291,39 @@ async fn ownership_lost_before_any_model_call_does_not_spend_the_paid_budget() {
 }
 
 #[tokio::test]
+async fn a_supersession_fence_before_any_model_call_is_refunded_without_a_cancel() {
+    // A stale webhook hint can supersede a worker whose next owner confirms the
+    // same live head. `check_work` returns `ReviewSuperseded` directly, before
+    // anything cancels the execution scope, so the refund cannot rely on
+    // `is_cancelled` alone.
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![stalled_review(47)]).await.unwrap();
+    let now_ms = unix_time_ms();
+    let owned = next_owner(&store, "superseded", 47, now_ms).await;
+    let execution = worker_execution();
+    let timing = crate::review_timing::ReviewTiming::new("owner/repo", 47, "Incremental");
+    let result = review_with_refundable_paid_budget(
+        &store,
+        Some(&owned),
+        "sha-47",
+        now_ms,
+        &execution,
+        &timing,
+        || async { Err(Error::ReviewSuperseded) },
+        || async { Ok(true) },
+        || async { Ok(InnerReview::Complete(None)) },
+    )
+    .await;
+    assert!(matches!(result, Err(Error::ReviewSuperseded)), "{result:?}");
+    assert!(!execution.is_cancelled());
+    assert_eq!(
+        store.snapshot_for_test().incremental_heads[0].paid_attempts,
+        0,
+        "a supersession fence before any model call spends nothing"
+    );
+}
+
+#[tokio::test]
 async fn an_attempt_fenced_after_a_model_call_still_spends_its_paid_start() {
     let store = MockReviewJobStore::default();
     store.admit_batch(vec![stalled_review(45)]).await.unwrap();
