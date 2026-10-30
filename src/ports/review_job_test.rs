@@ -1455,8 +1455,6 @@ async fn a_refunded_paid_start_is_available_to_the_next_owner_up_to_the_refund_c
 
 #[tokio::test]
 async fn a_refund_for_a_head_that_is_no_longer_current_changes_nothing() {
-    use super::PaidStart;
-
     let store = MockReviewJobStore::default();
     store.admit_batch(vec![request("moved", 1)]).await.unwrap();
     let owned = reclaim_and_confirm(&store, "owner", 2).await;

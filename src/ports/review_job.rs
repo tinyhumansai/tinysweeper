@@ -345,6 +345,12 @@ pub struct IncrementalHeadBudget {
     /// Paid starts refunded for this head after ownership-fenced attempts.
     #[serde(default)]
     pub ownership_refunds: u32,
+    /// Advances whenever this budget starts over — a confirmed head change or
+    /// an explicit re-request re-arming a failed head. A refund names the
+    /// epoch its start was charged in, so a late refund cannot return a start
+    /// charged against a budget that has since been reset.
+    #[serde(default)]
+    pub epoch: u64,
     /// Deadline exhaustion is terminal until an authoritative head change.
     pub deadline_hit: bool,
     /// The terminal result for this exact head, if it already has one.
@@ -1091,6 +1097,7 @@ impl ReviewSchedulerState {
         budget.deadline_hit = false;
         budget.paid_attempts = 0;
         budget.ownership_refunds = 0;
+        budget.epoch = budget.epoch.wrapping_add(1);
         let head = budget.head_sha.clone();
         self.head_history.retain(|record| {
             !(record.repo == repo
@@ -1206,12 +1213,16 @@ impl ReviewSchedulerState {
                 return PaidStart::Exhausted;
             }
             budget.paid_attempts += 1;
-            return PaidStart::Started { epoch: 0 };
+            return PaidStart::Started {
+                epoch: budget.epoch,
+            };
         }
         if self.unfinished[index].paid_attempts >= MAX_REVIEW_PAID_ATTEMPTS {
             return PaidStart::Exhausted;
         }
         self.unfinished[index].paid_attempts += 1;
+        // A full review's per-job budget is never reset or re-armed, so it
+        // has a single epoch.
         PaidStart::Started { epoch: 0 }
     }
 
@@ -1223,14 +1234,14 @@ impl ReviewSchedulerState {
     /// 2026-10-30 host stalls produced exactly those attempts back to back
     /// until heads exhausted without a single model call. Refunds need no
     /// live ownership — losing it is why the attempt ended — but they only
-    /// touch the head that was charged, and stop at
+    /// touch the head and budget epoch that was charged, and stop at
     /// [`MAX_REVIEW_OWNERSHIP_REFUNDS`] so a host that never stops stalling
     /// still ends in a visible exhausted result rather than an endless job.
     pub fn refund_paid(
         &mut self,
         owned: &OwnedReview,
         head_sha: &str,
-        _epoch: u64,
+        epoch: u64,
         _now_ms: i64,
     ) -> bool {
         let Some(record) = self
@@ -1246,6 +1257,7 @@ impl ReviewSchedulerState {
                     budget.repo == record.request.repo
                         && budget.number == record.request.number
                         && budget.head_sha == head_sha
+                        && budget.epoch == epoch
                         && budget.terminal_outcome.is_none()
                         && !budget.deadline_hit
                 }) else {
@@ -1253,6 +1265,9 @@ impl ReviewSchedulerState {
                 };
                 (&mut budget.paid_attempts, &mut budget.ownership_refunds)
             } else {
+                if epoch != 0 {
+                    return false;
+                }
                 (&mut record.paid_attempts, &mut record.ownership_refunds)
             };
         if *paid_attempts == 0 || *ownership_refunds >= MAX_REVIEW_OWNERSHIP_REFUNDS {
@@ -1331,6 +1346,7 @@ impl ReviewSchedulerState {
                 0
             };
             current.ownership_refunds = 0;
+            current.epoch = current.epoch.wrapping_add(1);
             current.deadline_hit = historical_deadline;
             current.terminal_outcome = historical_outcome;
             self.unfinished[index].request.head_sha = Some(head_sha.to_owned());
@@ -1348,6 +1364,7 @@ impl ReviewSchedulerState {
             // first confirmed head; only a later confirmed transition resets it.
             paid_attempts: self.unfinished[index].paid_attempts,
             ownership_refunds: 0,
+            epoch: 0,
             deadline_hit: false,
             terminal_outcome: None,
         });
