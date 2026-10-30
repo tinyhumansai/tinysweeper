@@ -1361,3 +1361,27 @@ async fn tombstone_reservations_backpressure_without_evicting_live_dedupe_ids() 
     assert_eq!(state.terminal.len(), MAX_TERMINAL_REVIEW_RESERVATIONS);
     assert!(state.unfinished.is_empty());
 }
+
+/// On 2026-10-30 a swap-thrashing host stalled workers for over a minute
+/// between heartbeats. A stall of that size must not cost the owner its lease.
+#[tokio::test]
+async fn a_sixty_second_stall_after_a_missed_heartbeat_keeps_ownership() {
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![request("stalled", 1)]).await.unwrap();
+    let owned = claim_after_queue_ack(&store, "process-a", 2)
+        .await
+        .unwrap()
+        .unwrap();
+    // The heartbeat was due at 15 s; the host then stalled for 60 s more.
+    let stalled_heartbeat = 2 + 15_000 + 60_000;
+    assert!(store.owns(&owned, stalled_heartbeat).await.unwrap());
+    assert!(store.renew(&owned, stalled_heartbeat).await.unwrap());
+    assert!(
+        store
+            .claim_next("process-b", stalled_heartbeat)
+            .await
+            .unwrap()
+            .is_none(),
+        "a stalled but live owner must not be replaced"
+    );
+}
