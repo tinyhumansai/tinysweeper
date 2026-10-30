@@ -75,3 +75,100 @@ async fn a_heartbeat_stalled_for_a_minute_keeps_the_local_owner_fence_open() {
         "a one-minute stall must not trip the local owner fence"
     );
 }
+
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CapturedLogs {
+    /// Route this thread's events here; the current-thread test runtime runs
+    /// the spawned heartbeat on the same thread, so its events land here too.
+    fn install(&self) -> tracing::subscriber::DefaultGuard {
+        let writer = self.clone();
+        tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        )
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_heartbeat_renewal_is_logged_with_its_elapsed_time() {
+    let logs = CapturedLogs::default();
+    let _logging = logs.install();
+    let store = Arc::new(MockReviewJobStore::default());
+    store.admit_batch(vec![stalled_review(42)]).await.unwrap();
+    let now = unix_time_ms();
+    acknowledge_queued_checks(&*store, now).await;
+    let owned = store.claim_next("slow", now).await.unwrap().unwrap();
+    let (lost_tx, lost) = watch::channel(false);
+    let (until_tx, _until) =
+        watch::channel(conservative_owner_deadline(tokio::time::Instant::now()));
+    store.delay_renew(Duration::from_secs(6));
+    let _heartbeat = spawn_review_heartbeat(
+        store.clone(),
+        owned,
+        lost_tx,
+        until_tx,
+        Duration::from_secs(15),
+    );
+
+    tokio::time::sleep(Duration::from_secs(22)).await;
+    assert!(!*lost.borrow());
+    let text = logs.text();
+    let line = text
+        .lines()
+        .find(|line| line.contains("WARN") && line.contains("slow"))
+        .unwrap_or_else(|| panic!("no slow-renewal warning: {text}"));
+    assert!(line.contains("elapsed_ms=6000"), "{line}");
+    assert!(line.contains("job_id=stall-42"), "{line}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_heartbeat_that_finds_its_record_replaced_logs_the_lost_ownership() {
+    let logs = CapturedLogs::default();
+    let _logging = logs.install();
+    let store = Arc::new(MockReviewJobStore::default());
+    store.admit_batch(vec![stalled_review(43)]).await.unwrap();
+    let now = unix_time_ms();
+    acknowledge_queued_checks(&*store, now).await;
+    let owned = store.claim_next("replaced", now).await.unwrap().unwrap();
+    // Another path releases the record before the first heartbeat lands.
+    assert!(store.defer(&owned, now, now).await.unwrap());
+    let (lost_tx, lost) = watch::channel(false);
+    let (until_tx, _until) =
+        watch::channel(conservative_owner_deadline(tokio::time::Instant::now()));
+    let _heartbeat = spawn_review_heartbeat(
+        store.clone(),
+        owned,
+        lost_tx,
+        until_tx,
+        Duration::from_secs(15),
+    );
+
+    tokio::time::sleep(Duration::from_secs(16)).await;
+    assert!(*lost.borrow());
+    let text = logs.text();
+    let line = text
+        .lines()
+        .find(|line| line.contains("ownership lost: record replaced or expired"))
+        .unwrap_or_else(|| panic!("no lost-ownership warning: {text}"));
+    assert!(line.contains("WARN"), "{line}");
+    assert!(line.contains("job_id=stall-43"), "{line}");
+}
