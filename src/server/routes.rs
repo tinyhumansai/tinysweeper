@@ -8788,7 +8788,8 @@ mod tests {
         assert_eq!(conclusions.len(), 1, "the open status is concluded once");
         assert_eq!(
             conclusions[0].conclusion,
-            Some(crate::forge::CheckConclusion::Neutral)
+            Some(crate::forge::CheckConclusion::ActionRequired),
+            "exhaustion is a visible failure, not a deliberate skip"
         );
         let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let writer_bytes = bytes.clone();
@@ -8919,7 +8920,8 @@ mod tests {
         assert_eq!(checks[0].conclusion, None);
         assert_eq!(
             checks[1].conclusion,
-            Some(crate::forge::CheckConclusion::Neutral)
+            Some(crate::forge::CheckConclusion::ActionRequired),
+            "exhaustion is a visible failure, not a deliberate skip"
         );
         assert_eq!(model_starts.load(Ordering::SeqCst), 0);
     }
