@@ -718,7 +718,9 @@ async fn review_group(
     // non-blocking structured notes. A Likely cap makes that caveat visible
     // in their confidence badge without allowing unsupported repository-wide
     // claims to drive a check verdict or inline comment. Scanners have their
-    // own evidence and are outside this model-finding gate.
+    // own evidence and are outside this model-finding gate. Gated on
+    // `lacks_context`, not `is_degraded`: a stale index still gave the
+    // reviewer real code, and capping on it silenced nearly every review.
     if input.retrieval_status.lacks_context() {
         capped_for_degraded_context = findings.len();
         for finding in &mut findings {
