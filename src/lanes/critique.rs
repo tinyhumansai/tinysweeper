@@ -1240,7 +1240,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_index_keeps_unsupported_unchanged_code_at_likely_confidence() {
+    async fn a_cold_index_keeps_unsupported_unchanged_code_at_likely_confidence() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1309,7 +1309,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn degraded_retrieval_keeps_findings_grounded_on_changed_lines() {
+    async fn cold_retrieval_keeps_findings_grounded_on_changed_lines() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1419,7 +1419,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn degraded_retrieval_caps_readable_unchanged_anchor_without_caller_evidence() {
+    async fn cold_retrieval_caps_readable_unchanged_anchor_without_caller_evidence() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1506,7 +1506,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_claim_about_an_existing_declared_module_is_still_capped() {
+    a_cold_index_claim_about_an_existing_declared_module_is_still_capped() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/lib.rs",
@@ -1877,7 +1877,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_missing_module_claim_is_capped_without_a_successful_head_read() {
+    async fn a_cold_index_missing_module_claim_is_capped_without_a_successful_head_read() {
         let mut config = config();
         config.grouping.enabled = false;
         let pr = pull_request();
