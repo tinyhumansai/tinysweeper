@@ -38,6 +38,14 @@ use crate::error::{Error, Result};
 /// one, not to police clone size.
 pub const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+/// How long a git being stopped is given between SIGTERM and SIGKILL.
+///
+/// SIGTERM is what lets git remove its lockfiles; a SIGKILLed `git fetch`
+/// leaves `shallow.lock` behind and every later fetch of that mirror fails.
+/// Git's cleanup is a handful of unlinks, so a few seconds is generous, and
+/// it bounds how long a cancelled review holds its repository lock.
+pub const GIT_TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A disposable checkout of exactly one commit, deleted when dropped.
 #[derive(Debug)]
 pub struct Checkout {
@@ -849,8 +857,15 @@ async fn wait_for_git_child(
     }
 }
 
+/// Stop a git child and reap it, reporting whether its exit was confirmed.
+///
+/// The child's whole process group is asked to exit with SIGTERM, given
+/// [`GIT_TERMINATION_GRACE`], then SIGKILLed. Both halves matter in
+/// production: SIGKILL to `git` alone left lockfiles that wedged a mirror for
+/// days, and orphaned its helpers (`git-remote-https`, `index-pack`, …) onto
+/// the container's PID 1, which never reaped them.
 async fn terminate_git_child(child: &mut tokio::process::Child) -> (bool, String) {
-    let kill_result = child.kill().await;
+    let kill_result = stop_git_process_group(child, GIT_TERMINATION_GRACE).await;
     match child.wait().await {
         Ok(_) => (true, String::new()),
         Err(wait_error) => (
@@ -862,6 +877,135 @@ async fn terminate_git_child(child: &mut tokio::process::Child) -> (bool, String
                     .map_or_else(|| "sent".to_string(), |err| err.to_string())
             ),
         ),
+    }
+}
+
+/// SIGTERM the child's process group, wait up to `grace` for the leader and
+/// then the rest of the group, and SIGKILL whatever is left.
+///
+/// Relies on [`git_command`] having made the child a group leader. The group
+/// is signalled by the leader's pid; a pid is not reused while a group of
+/// that id still has members, and the final SIGKILL follows the last check
+/// by microseconds, so it cannot reach an unrelated group in practice.
+#[cfg(unix)]
+async fn stop_git_process_group(
+    child: &mut tokio::process::Child,
+    grace: std::time::Duration,
+) -> std::io::Result<()> {
+    // `None` once reaped: there is nothing left to signal, and the pid may
+    // already belong to someone else.
+    let Some(pid) = child.id() else {
+        return Ok(());
+    };
+    let group = pid as libc::pid_t;
+    let deadline = tokio::time::Instant::now() + grace;
+    let terminated = signal_process_group(group, libc::SIGTERM);
+    // The leader first: the lockfiles are git's own. A wait error is not
+    // handled here — the caller's final wait reports it.
+    let _ = tokio::time::timeout_at(deadline, child.wait()).await;
+    // Then its helpers, which share the group unless they detached.
+    while signal_process_group(group, 0).is_ok() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let killed = signal_process_group(group, libc::SIGKILL);
+    if killed.is_err() {
+        // The group could not be signalled at all; make sure the leader, at
+        // least, does not outlive this call.
+        let _ = child.start_kill();
+    }
+    terminated.and(killed)
+}
+
+/// Without process groups the direct child is all that can be stopped.
+#[cfg(not(unix))]
+async fn stop_git_process_group(
+    child: &mut tokio::process::Child,
+    _grace: std::time::Duration,
+) -> std::io::Result<()> {
+    child.start_kill()
+}
+
+/// `kill(-group, signal)`, treating a group that no longer exists as success
+/// for real signals. Signal 0 reports it as an error: that is the probe.
+#[cfg(unix)]
+fn signal_process_group(group: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: `kill` has no memory-safety preconditions; a negative pid
+    // addresses the process group, never this process.
+    if unsafe { libc::kill(-group, signal) } == 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    if signal != 0 && err.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(err)
+}
+
+/// A spawned git that is stopped through [`terminate_git_child`] if it is
+/// dropped before being reaped.
+///
+/// This is the path a cancelled review takes: its future is dropped while
+/// `git fetch` runs. `kill_on_drop` would SIGKILL git alone, leaving its
+/// lockfiles and orphaning its helpers, so the child is handed to a
+/// background task that stops the whole group gracefully. `kill_on_drop`
+/// remains the backstop for when that task cannot run — no runtime, or one
+/// shutting down drops the task and with it the child.
+struct SupervisedGit(Option<tokio::process::Child>);
+
+impl SupervisedGit {
+    /// Collect the child's output and reap it, like `Child::wait_with_output`
+    /// but leaving the child here if cancelled.
+    async fn output(&mut self) -> std::io::Result<std::process::Output> {
+        use tokio::io::AsyncReadExt;
+
+        async fn read_all(
+            pipe: Option<impl tokio::io::AsyncRead + Unpin>,
+        ) -> std::io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                pipe.read_to_end(&mut bytes).await?;
+            }
+            Ok(bytes)
+        }
+
+        let child = self
+            .0
+            .as_mut()
+            .expect("a supervised git is present until reaped");
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let (status, stdout, stderr) =
+            tokio::try_join!(child.wait(), read_all(stdout), read_all(stderr))?;
+        self.0 = None;
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
+    /// Stop and reap the child now, as [`terminate_git_child`] does.
+    async fn terminate(&mut self) -> (bool, String) {
+        match self.0.take() {
+            Some(mut child) => terminate_git_child(&mut child).await,
+            None => (true, String::new()),
+        }
+    }
+}
+
+impl Drop for SupervisedGit {
+    fn drop(&mut self) {
+        let Some(mut child) = self.0.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let (exited, termination) = terminate_git_child(&mut child).await;
+                if !exited {
+                    tracing::warn!(%termination, "a dropped git child could not be stopped");
+                }
+            });
+        }
     }
 }
 
@@ -889,11 +1033,11 @@ fn git_command(root: &Path, token: &str, args: &[&str]) -> Command {
         .arg("-C")
         .arg(root)
         .args(args)
-        // Dropping `command.output()` — GIT_TIMEOUT firing below, or the
-        // caller's own deadline cancelling this future first, `review_inner`'s
-        // `run.deadline` among them — must not leave `git` running unsupervised.
-        // Without this, a `Future` dropped mid-fetch orphans the child: tokio
-        // does not kill a spawned process on drop unless told to.
+        // The backstop, not the cancellation path. A dropped or timed-out git
+        // is stopped gracefully by `SupervisedGit` / `terminate_git_child`;
+        // this SIGKILL only fires when that cannot run, and without it a child
+        // dropped then would be orphaned outright: tokio does not kill a
+        // spawned process on drop unless told to.
         .kill_on_drop(true)
         // Nothing inherited. A `GIT_CONFIG_COUNT` already in the environment
         // would silently renumber the pairs set below, and the ambient
@@ -915,6 +1059,10 @@ fn git_command(root: &Path, token: &str, args: &[&str]) -> Command {
             "GIT_CONFIG_VALUE_1",
             format!("Authorization: Basic {}", basic_auth(token)),
         );
+    // Its own process group, so stopping git reaches the helpers it spawns
+    // (`git-remote-https`, `index-pack`, …) and not only git itself.
+    #[cfg(unix)]
+    command.process_group(0);
     command
 }
 
@@ -925,10 +1073,22 @@ async fn git_stdout(root: &Path, token: &str, args: &[&str]) -> Result<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = tokio::time::timeout(GIT_TIMEOUT, command.output())
-        .await
-        .map_err(|_| Error::Forge(format!("git {} timed out", args[0])))?
+    let child = command
+        .spawn()
         .map_err(|err| Error::Forge(format!("could not run git: {err}")))?;
+    // Dropping this future — the caller's own deadline, or a review losing
+    // ownership mid-fetch — stops git through `SupervisedGit`'s drop.
+    let mut git = SupervisedGit(Some(child));
+    let output = match tokio::time::timeout(GIT_TIMEOUT, git.output()).await {
+        Ok(output) => output.map_err(|err| Error::Forge(format!("could not run git: {err}")))?,
+        Err(_) => {
+            let (_, termination) = git.terminate().await;
+            return Err(Error::Forge(format!(
+                "git {} timed out{termination}",
+                args[0]
+            )));
+        }
+    };
 
     if !output.status.success() {
         // Scrubbed before it is ever formatted. git echoes the URL it was given
@@ -1284,7 +1444,11 @@ mod tests {
     #[cfg(unix)]
     async fn helper_pid(path: &Path) -> i32 {
         eventually("the helper is started", || path.exists()).await;
-        std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
+        std::fs::read_to_string(path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
     }
 
     #[cfg(unix)]
@@ -1311,8 +1475,14 @@ mod tests {
 
         assert!(exited, "{termination}");
         assert_eq!(termination, "");
-        assert!(mark.exists(), "the child must be sent SIGTERM before SIGKILL");
-        eventually("the helper exits with its group", || process_is_gone(helper)).await;
+        assert!(
+            mark.exists(),
+            "the child must be sent SIGTERM before SIGKILL"
+        );
+        eventually("the helper exits with its group", || {
+            process_is_gone(helper)
+        })
+        .await;
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
@@ -1334,7 +1504,10 @@ mod tests {
         };
 
         eventually("the dropped git's helper exits", || process_is_gone(helper)).await;
-        assert!(mark.exists(), "git's children must be sent SIGTERM, not only SIGKILL");
+        assert!(
+            mark.exists(),
+            "git's children must be sent SIGTERM, not only SIGKILL"
+        );
     }
 
     #[test]

@@ -696,7 +696,10 @@ mod tests {
             b"new fixture head\n"
         );
         for lock in MIRROR_LOCKFILES {
-            assert!(!mirror.join(lock).exists(), "{lock} should have been removed");
+            assert!(
+                !mirror.join(lock).exists(),
+                "{lock} should have been removed"
+            );
         }
     }
 
