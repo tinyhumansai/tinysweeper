@@ -1078,33 +1078,36 @@ impl ReviewSchedulerState {
     /// Only `Exhausted` and `Deadline` are failures a person can reasonably
     /// ask to retry; a `Published` or `Declined` head stays terminal, so a
     /// comment still cannot buy a second paid review of a reviewed commit.
-    /// The head's paid budget starts over, as it would after a push. Matching
-    /// head history goes too, so a force-push back to that head is covered.
+    /// The head's paid budget starts over, as it would after a push.
+    ///
+    /// Every failed head in the pull request's history is cleared too, not
+    /// only the one the budget currently names. The comment is admitted
+    /// before any worker confirms which head is live, so after a force-push
+    /// back to an earlier failed head the budget still names the head that
+    /// replaced it; clearing only that one would let `confirm_head` restore the
+    /// earlier failure from history and silently skip the requested review.
+    /// Failed history is the only thing cleared, so a reviewed head stays
+    /// reviewed.
     fn rearm_failed_head(&mut self, repo: &str, number: u64) {
         let failed = |outcome: Option<TerminalOutcome>, deadline_hit: bool| match outcome {
             Some(TerminalOutcome::Exhausted | TerminalOutcome::Deadline) => true,
             None => deadline_hit,
             Some(_) => false,
         };
-        let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
+        self.head_history.retain(|record| {
+            !(record.repo == repo && record.number == number && failed(Some(record.outcome), false))
+        });
+        if let Some(budget) = self.incremental_heads.iter_mut().find(|budget| {
             budget.repo == repo
                 && budget.number == number
                 && failed(budget.terminal_outcome, budget.deadline_hit)
-        }) else {
-            return;
-        };
-        budget.terminal_outcome = None;
-        budget.deadline_hit = false;
-        budget.paid_attempts = 0;
-        budget.ownership_refunds = 0;
-        budget.epoch = budget.epoch.wrapping_add(1);
-        let head = budget.head_sha.clone();
-        self.head_history.retain(|record| {
-            !(record.repo == repo
-                && record.number == number
-                && record.head_sha == head
-                && failed(Some(record.outcome), false))
-        });
+        }) {
+            budget.terminal_outcome = None;
+            budget.deadline_hit = false;
+            budget.paid_attempts = 0;
+            budget.ownership_refunds = 0;
+            budget.epoch = budget.epoch.wrapping_add(1);
+        }
     }
 
     /// Claim the oldest eligible record within the configured global bound.

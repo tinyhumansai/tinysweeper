@@ -1538,7 +1538,10 @@ async fn a_comment_rerequest_rearms_an_exhausted_head_the_pull_request_returns_t
     // history and the failure check's advertised recovery does nothing.
     let store = MockReviewJobStore::default();
     store.admit_batch(vec![request("push-a", 1)]).await.unwrap();
-    let a = claim_after_queue_ack(&store, "a", 2).await.unwrap().unwrap();
+    let a = claim_after_queue_ack(&store, "a", 2)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(store.confirm_head(&a, "sha-a", 2).await.unwrap());
     assert!(
         store
@@ -1548,7 +1551,10 @@ async fn a_comment_rerequest_rearms_an_exhausted_head_the_pull_request_returns_t
     );
 
     store.admit_batch(vec![request("push-b", 4)]).await.unwrap();
-    let b = claim_after_queue_ack(&store, "b", 5).await.unwrap().unwrap();
+    let b = claim_after_queue_ack(&store, "b", 5)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(store.confirm_head(&b, "sha-b", 5).await.unwrap());
     assert!(
         store
@@ -1563,7 +1569,10 @@ async fn a_comment_rerequest_rearms_an_exhausted_head_the_pull_request_returns_t
         store.admit_batch(vec![comment]).await.unwrap(),
         Admission::Admitted
     );
-    let back_to_a = claim_after_queue_ack(&store, "back", 8).await.unwrap().unwrap();
+    let back_to_a = claim_after_queue_ack(&store, "back", 8)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(store.confirm_head(&back_to_a, "sha-a", 8).await.unwrap());
     assert!(
         !store.head_is_terminal(&back_to_a, 8).await.unwrap(),
