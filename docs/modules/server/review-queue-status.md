@@ -82,7 +82,8 @@ finds its record replaced or expired is logged with the job ID.
 
 An attempt that ends at an ownership or supersession fence before any model
 dispatch gets its paid start back (`refund_paid`). Refunds do not need live
-ownership, touch only the head that was charged, and stop after ten per head
+ownership, touch only the head and budget epoch that was charged (a re-arm or
+head change opens a new epoch), and stop after ten per head
 (`MAX_REVIEW_OWNERSHIP_REFUNDS`), so a host that never stops stalling still
 ends in an exhausted result instead of an endless job. Ordinary failures, and
 fenced attempts that already dispatched a model call, are charged as before.
