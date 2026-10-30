@@ -3,7 +3,7 @@
 #
 # Two tiers, both fanned out in parallel so a verdict arrives in minutes:
 #
-#   dry     Run a tinysweeper build's `review --dry-run` against a set of live
+#   dry     Run a tinysweeper build's `review --propose-to` (read-only forge, no apply) against a set of live
 #           pull requests. Nothing is written to GitHub. Records per-PR wall
 #           time, lane completion and finding counts, then asserts every lane
 #           completed. Run it with the baseline build and the candidate build
@@ -71,7 +71,7 @@ dry_one() { # dry_one <pr>  — runs in a subshell under xargs
   start=$(date +%s%N)
   set +e
   RUST_LOG=${RUST_LOG:-tinysweeper=info} "$bin" review --repo "$repo" --pr "$pr" \
-    ${config:+--config "$config"} --dry-run --propose-to "$out/$pr.json" >"$out/$pr.log" 2>&1
+    ${config:+--config "$config"} --propose-to "$out/$pr.json" >"$out/$pr.log" 2>&1
   rc=$?
   set -e
   end=$(date +%s%N)
