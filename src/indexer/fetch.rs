@@ -15,6 +15,16 @@
 //! a fetch into a hang. Git children are supervised through cancellation and
 //! timeout; the only program this module spawns is `git`.
 //!
+//! # Stopping git is graceful
+//!
+//! Each git leads its own process group, and stopping one — timeout,
+//! cancellation, or its future being dropped — sends the group SIGTERM, waits
+//! [`GIT_TERMINATION_GRACE`], then SIGKILLs it. SIGKILL alone is what left a
+//! production mirror wedged on a stale `shallow.lock` and orphaned git's
+//! helpers as zombies; `kill_on_drop` is kept only as the backstop. On unix
+//! only, since that is where the server runs; elsewhere the direct child is
+//! killed as before.
+//!
 //! # The token is not in argv
 //!
 //! The obvious way to authenticate is `https://x-access-token:TOKEN@github.com/…`

@@ -8,8 +8,11 @@
 //! A cache implementation must serialize operations for one repository,
 //! fetch and verify the requested immutable commit before checking it out, and
 //! keep each review's worktree disposable. Cancellation may drop a checkout
-//! while Git is running, so subprocesses must remain kill-on-drop and stale
-//! worktree registrations must be pruned before reuse. Submodule objects are
+//! while Git is running, so subprocesses are stopped through the graceful
+//! group termination in `fetch.rs` (kill-on-drop is only its backstop) and
+//! stale worktree registrations must be pruned before reuse. A lockfile a
+//! killed git still managed to leave is removed once it is older than any git
+//! of ours can live; see [`STALE_LOCK_AGE`]. Submodule objects are
 //! separate repositories: they are fetched only after a changed gitlink or an
 //! actual lane read requires them, under the same host and allowlist checks as
 //! the existing `Checkout` path.
