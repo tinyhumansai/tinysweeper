@@ -67,7 +67,7 @@ done
 [ ${#prs[@]} -gt 0 ] || prs=("${DEFAULT_PRS[@]}")
 
 pct() { # pct <percentile> < numbers
-  sort -n | awk -v p="$1" '{a[NR]=$1} END {if (NR==0) {print "-"; exit} i=int((NR-1)*p/100)+1; print a[i]}'
+  sort -n | awk -v p="$1" 'NF {a[++n]=$1} END {if (n==0) {print "-"; exit} i=int((n-1)*p/100)+1; print a[i]}'
 }
 
 dry_one() { # dry_one <pr>  — runs in a subshell under xargs
@@ -189,6 +189,11 @@ run_canary() {
     [ $(( $(date +%s) - queued_at )) -gt "$timeout_s" ] && { echo "timed out with $pending PRs unsettled"; break; }
     sleep 15
   done
+
+  # Dispatchers still retrying a 503 at the deadline have nothing left to do.
+  local stragglers; stragglers=$(jobs -p)
+  [ -z "$stragglers" ] || kill $stragglers 2>/dev/null || true
+  wait 2>/dev/null || true
 
   local log; log=$(remote "$compose logs --since $since --no-color tinysweeper 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g'")
   local cancelled locks lost z1
