@@ -1528,3 +1528,45 @@ async fn a_refund_from_before_a_rearm_cannot_return_a_start_charged_after_it() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_comment_rerequest_rearms_an_exhausted_head_the_pull_request_returns_to() {
+    // Head A exhausts, head B is confirmed (A's failure moves into history),
+    // the branch is force-pushed back to A, and `@tinysweeper` is commented
+    // before any worker confirms that transition. The re-request must still
+    // reach A: otherwise `confirm_head` restores A's Exhausted outcome from
+    // history and the failure check's advertised recovery does nothing.
+    let store = MockReviewJobStore::default();
+    store.admit_batch(vec![request("push-a", 1)]).await.unwrap();
+    let a = claim_after_queue_ack(&store, "a", 2).await.unwrap().unwrap();
+    assert!(store.confirm_head(&a, "sha-a", 2).await.unwrap());
+    assert!(
+        store
+            .finish(&a, TerminalOutcome::Exhausted, 3, 3)
+            .await
+            .unwrap()
+    );
+
+    store.admit_batch(vec![request("push-b", 4)]).await.unwrap();
+    let b = claim_after_queue_ack(&store, "b", 5).await.unwrap().unwrap();
+    assert!(store.confirm_head(&b, "sha-b", 5).await.unwrap());
+    assert!(
+        store
+            .finish(&b, TerminalOutcome::Published, 6, 6)
+            .await
+            .unwrap()
+    );
+
+    let mut comment = request("comment", 7);
+    comment.event = "issue_comment".into();
+    assert_eq!(
+        store.admit_batch(vec![comment]).await.unwrap(),
+        Admission::Admitted
+    );
+    let back_to_a = claim_after_queue_ack(&store, "back", 8).await.unwrap().unwrap();
+    assert!(store.confirm_head(&back_to_a, "sha-a", 8).await.unwrap());
+    assert!(
+        !store.head_is_terminal(&back_to_a, 8).await.unwrap(),
+        "the explicit re-request re-arms A even though B was the confirmed head"
+    );
+}
