@@ -544,6 +544,148 @@ mod tests {
         );
     }
 
+    /// Commit a new head in the fixture's source and push it to `remote`.
+    fn push_new_head(fixture: &Path, remote: &Path) -> String {
+        let source = fixture.join("source");
+        std::fs::write(source.join("README.md"), "new fixture head\n").unwrap();
+        git(&["-C", source.to_str().unwrap(), "add", "README.md"]);
+        git(&[
+            "-C",
+            source.to_str().unwrap(),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "new fixture head",
+        ]);
+        let revision = git(&["-C", source.to_str().unwrap(), "rev-parse", "HEAD"]);
+        git(&[
+            "-C",
+            source.to_str().unwrap(),
+            "push",
+            "--quiet",
+            remote.to_str().unwrap(),
+            "HEAD",
+        ]);
+        revision
+    }
+
+    /// The lockfiles a killed Git can leave in a bare mirror.
+    const MIRROR_LOCKS: [&str; 5] = [
+        "shallow.lock",
+        "index.lock",
+        "packed-refs.lock",
+        "config.lock",
+        "HEAD.lock",
+    ];
+
+    fn write_lock(path: &Path, age: std::time::Duration) {
+        std::fs::write(path, "").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn locks_older_than_any_git_invocation_are_removed_before_the_next_fetch() {
+        // Production: a SIGKILLed shallow fetch left `shallow.lock` behind and
+        // every later fetch of that repository failed with "File exists" for
+        // two days. Nothing but this server writes the mirror, and no git of
+        // ours lives past the timeout plus its termination grace, so a lock
+        // older than that is debris.
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let (remote, first_revision) = local_bare_repository(fixture.path());
+        let cache_root = fixture.path().join("cache");
+        let cache = RepositoryCache::at(&cache_root).expect("cache root");
+        let fetches = AtomicUsize::new(0);
+        cache
+            .checkout_from_url(
+                "acme/widgets",
+                &first_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("first checkout creates the mirror");
+        let second_revision = push_new_head(fixture.path(), &remote);
+        let mirror = cache_root.join("acme/widgets.git");
+        let stale = crate::indexer::fetch::GIT_TIMEOUT
+            + crate::indexer::fetch::GIT_TERMINATION_GRACE
+            + std::time::Duration::from_secs(60);
+        for lock in MIRROR_LOCKS {
+            write_lock(&mirror.join(lock), stale);
+        }
+
+        let checkout = cache
+            .checkout_from_url(
+                "acme/widgets",
+                &second_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("a stale lock must not wedge the mirror");
+
+        assert_eq!(
+            std::fs::read(checkout.path().join("README.md")).unwrap(),
+            b"new fixture head\n"
+        );
+        for lock in MIRROR_LOCKS {
+            assert!(!mirror.join(lock).exists(), "{lock} should have been removed");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fresh_lock_is_left_to_whoever_holds_it() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let (remote, first_revision) = local_bare_repository(fixture.path());
+        let cache_root = fixture.path().join("cache");
+        let cache = RepositoryCache::at(&cache_root).expect("cache root");
+        let fetches = AtomicUsize::new(0);
+        cache
+            .checkout_from_url(
+                "acme/widgets",
+                &first_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("first checkout creates the mirror");
+        let second_revision = push_new_head(fixture.path(), &remote);
+        let lock = cache_root.join("acme/widgets.git/shallow.lock");
+        write_lock(&lock, std::time::Duration::from_secs(60));
+        let written = std::fs::metadata(&lock).unwrap().modified().unwrap();
+
+        let result = cache
+            .checkout_from_url(
+                "acme/widgets",
+                &second_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a lock that may belong to a live git must make the fetch fail, not be stolen"
+        );
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().modified().unwrap(),
+            written,
+            "the fresh lock must be untouched"
+        );
+    }
+
     #[test]
     fn cache_root_override_wins_and_empty_override_uses_the_private_user_cache() {
         assert_eq!(
