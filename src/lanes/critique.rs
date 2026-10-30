@@ -1277,8 +1277,66 @@ fn helper() {
             outcome.findings[0].confidence,
             DEGRADED_CONTEXT_CONFIDENCE_CAP
         );
+        assert!(outcome.context_degraded, "a cold index is no context at all");
         assert!(outcome.summary.contains("capped at Likely confidence"));
         assert!(!outcome.summary.contains("old branch is broken"));
+    }
+
+    /// One critical, high-confidence claim about an unchanged line, under
+    /// `retrieval_status`.
+    async fn unchanged_line_claim_under(
+        retrieval_status: crate::retrieve::RetrievalStatus,
+    ) -> LaneOutcome {
+        let diffs = vec![parse_file_patch(
+            "src/main.rs",
+            "@@ -1,2 +1,3 @@\n fn main() {\n+    let ready = true;\n }\n",
+        )];
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The old branch is broken.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "fn main() {",
+                    "rule": "bad-caller",
+                    "title": "Handle the old caller",
+                    "body": "The unchanged caller uses an incompatible contract.",
+                    "severity": "critical",
+                    "confidence": 0.99
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+        run_with_context(model, &config(), &diffs, &BTreeMap::new(), retrieval_status).await
+    }
+
+    #[tokio::test]
+    async fn a_stale_index_neither_caps_confidence_nor_marks_the_lane_context_degraded() {
+        // A stale index is real code from a recent revision, and it is the
+        // usual state: the head is indexed in the background as the review
+        // starts. Treating it like a cold index withheld every finding.
+        let outcome = unchanged_line_claim_under(crate::retrieve::RetrievalStatus::Stale {
+            indexed: Some("olderrevision0000000".into()),
+        })
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].confidence, 0.99);
+        assert!(!outcome.context_degraded);
+        assert!(!outcome.summary.contains("capped at Likely confidence"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_retrieval_caps_confidence_and_marks_the_lane_context_degraded() {
+        let outcome = unchanged_line_claim_under(crate::retrieve::RetrievalStatus::Unavailable {
+            reason: "the embedding provider is down".into(),
+        })
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert!(outcome.context_degraded);
     }
 
     #[tokio::test]
