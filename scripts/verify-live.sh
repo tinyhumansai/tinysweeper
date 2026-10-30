@@ -19,7 +19,7 @@
 #           repository cache and PID 1, which the CLI does not touch.
 #
 # Usage:
-#   scripts/verify-live.sh dry    --bin target/release/tinysweeper [--repo R] [-P N] [--out DIR] [PR...]
+#   scripts/verify-live.sh dry    --bin target/release/tinysweeper [--config .tinysweeper.toml] [--repo R] [-P N] [--out DIR] [PR...]
 #   scripts/verify-live.sh canary [--repo R] [--host robot1] [--timeout 1800] [PR...]
 #
 # dry needs GITHUB_TOKEN (or a logged-in `gh`) and the model key the config
@@ -42,6 +42,7 @@ repo=tinyhumansai/openhuman
 parallel=4
 out=""
 bin=""
+config=""
 host=robot1
 timeout_s=1800
 prs=()
@@ -51,6 +52,7 @@ while [ $# -gt 0 ]; do
     -P) parallel=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
     --bin) bin=$2; shift 2 ;;
+    --config) config=$(realpath "$2"); shift 2 ;;
     --host) host=$2; shift 2 ;;
     --timeout) timeout_s=$2; shift 2 ;;
     --newest) mapfile -t -O "${#prs[@]}" prs < <(gh pr list -R "$repo" -L "$2" --json number -q '.[].number'); shift 2 ;;
@@ -69,7 +71,7 @@ dry_one() { # dry_one <pr>  — runs in a subshell under xargs
   start=$(date +%s%N)
   set +e
   RUST_LOG=${RUST_LOG:-tinysweeper=info} "$bin" review --repo "$repo" --pr "$pr" \
-    --dry-run --propose-to "$out/$pr.json" >"$out/$pr.log" 2>&1
+    ${config:+--config "$config"} --dry-run --propose-to "$out/$pr.json" >"$out/$pr.log" 2>&1
   rc=$?
   set -e
   end=$(date +%s%N)
@@ -81,7 +83,7 @@ run_dry() {
   out=${out:-verify-live-$(date +%Y%m%dT%H%M%S)}
   mkdir -p "$out"
   export GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token)}
-  export -f dry_one; export bin repo out
+  export -f dry_one; export bin repo out config
   echo "dry: ${#prs[@]} PRs on $repo, $parallel at a time, build $($bin --version 2>/dev/null || echo "$bin")"
   local t0; t0=$(date +%s)
   printf '%s\n' "${prs[@]}" | xargs -P "$parallel" -I{} bash -c 'dry_one {}'
