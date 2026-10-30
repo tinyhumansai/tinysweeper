@@ -1165,7 +1165,8 @@ fn helper() {
         file_contents: &BTreeMap<String, String>,
         retrieval_status: crate::retrieve::RetrievalStatus,
     ) -> LaneOutcome {
-        run_with_context_and_tree(model, config, diffs, file_contents, retrieval_status, None).await
+        run_with_context_and_tree(model, config, diffs, file_contents, retrieval_status, "", None)
+            .await
     }
 
     async fn run_with_context_and_tree(
@@ -1174,6 +1175,7 @@ fn helper() {
         diffs: &[FileDiff],
         file_contents: &BTreeMap<String, String>,
         retrieval_status: crate::retrieve::RetrievalStatus,
+        retrieved_context: &str,
         tree: Option<&dyn crate::ports::tree::TreeReader>,
     ) -> LaneOutcome {
         let pr = pull_request();
@@ -1190,7 +1192,7 @@ fn helper() {
                 reviewed_evidence: "",
                 prior_findings: &[],
                 retrieval_status,
-                retrieved_context: "",
+                retrieved_context,
                 redaction_note: "",
                 e2e: None,
                 tree,
