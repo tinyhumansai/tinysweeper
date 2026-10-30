@@ -34,6 +34,22 @@ is the user's private cache directory, or `TINYSWEEPER_REPOSITORY_CACHE_DIR`.
 This is the crate's only process-spawn path, and a test pins that the only
 program it will ever spawn is `git`.
 
+Stopping git is graceful, because a SIGKILLed git cannot clean up. Each git
+runs in its own process group; a cancelled or timed-out one — including one
+whose future is simply dropped when a review loses ownership — has the whole
+group sent SIGTERM, five seconds' grace, then SIGKILL. That lets git remove its
+lockfiles and stops its helpers being orphaned. `kill_on_drop` remains only as
+the backstop for when no runtime is left to run the graceful path, and Compose
+runs the server under an init so any orphan that still escapes is reaped.
+
+A lock left behind anyway — a server killed mid-fetch — would otherwise wedge
+the mirror: in production a stale `shallow.lock` failed every fetch of one
+repository for two days. Before using a mirror, under its per-repository lock,
+the cache removes `shallow.lock`, `index.lock`, `packed-refs.lock`,
+`config.lock` and `HEAD.lock` when they are older than the git timeout plus that
+grace, logging each at warn. Only this server writes the cache, so a lock that
+old cannot belong to a live git of ours; a younger one is always left alone.
+
 Reading a tree is not running one, and the two ways git could have run something
 are closed rather than left to defaults: `core.hooksPath` is pointed at nowhere,
 so a hook in the fetched history cannot fire, and `GIT_TERMINAL_PROMPT=0` stops

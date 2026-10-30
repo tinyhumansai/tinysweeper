@@ -8,8 +8,11 @@
 //! A cache implementation must serialize operations for one repository,
 //! fetch and verify the requested immutable commit before checking it out, and
 //! keep each review's worktree disposable. Cancellation may drop a checkout
-//! while Git is running, so subprocesses must remain kill-on-drop and stale
-//! worktree registrations must be pruned before reuse. Submodule objects are
+//! while Git is running, so subprocesses are stopped through the graceful
+//! group termination in `fetch.rs` (kill-on-drop is only its backstop) and
+//! stale worktree registrations must be pruned before reuse. A lockfile a
+//! killed git still managed to leave is removed once it is older than any git
+//! of ours can live; see [`STALE_LOCK_AGE`]. Submodule objects are
 //! separate repositories: they are fetched only after a changed gitlink or an
 //! actual lane read requires them, under the same host and allowlist checks as
 //! the existing `Checkout` path.
@@ -140,6 +143,9 @@ impl RepositoryCache {
         let lock = self.lock_for(&mirror);
         let guard = lock.lock_owned().await;
         self.validate_existing_paths(repo, &mirror)?;
+        // Under the per-repository lock, so no git of this process is running
+        // in the mirror while it is swept.
+        remove_stale_git_locks(&mirror, STALE_LOCK_AGE);
         let mut missing = Vec::new();
         if !Checkout::mirror_has_revision(&mirror, revision).await? {
             missing.push(revision);
@@ -203,6 +209,72 @@ impl RepositoryCache {
         let lock = Arc::new(AsyncMutex::new(()));
         locks.insert(path.to_path_buf(), Arc::downgrade(&lock));
         lock
+    }
+}
+
+/// How old a lockfile in a mirror must be before it is treated as debris.
+///
+/// Only this server writes the cache, every write happens under the
+/// per-repository lock, and no git invocation of ours outlives
+/// [`GIT_TIMEOUT`](crate::indexer::fetch::GIT_TIMEOUT) plus the
+/// [`GIT_TERMINATION_GRACE`](crate::indexer::fetch::GIT_TERMINATION_GRACE)
+/// it is given to clean up: a lock older than that cannot belong to a live
+/// git, only to one that was killed before it could remove it. A younger lock
+/// is left alone even though it may well be debris too — stealing a live
+/// git's lock corrupts the mirror, while respecting a dead one costs failed
+/// fetches until it ages out.
+const STALE_LOCK_AGE: std::time::Duration =
+    crate::indexer::fetch::GIT_TIMEOUT.saturating_add(crate::indexer::fetch::GIT_TERMINATION_GRACE);
+
+/// The lockfiles git takes in a bare mirror's git dir. A SIGKILLed git never
+/// removes them, and the next git to want one fails with "File exists" —
+/// `shallow.lock` wedged every fetch of one repository for two days in
+/// production.
+const MIRROR_LOCKFILES: [&str; 5] = [
+    "shallow.lock",
+    "index.lock",
+    "packed-refs.lock",
+    "config.lock",
+    "HEAD.lock",
+];
+
+/// Remove every [`MIRROR_LOCKFILES`] entry in `git_dir` older than `max_age`.
+///
+/// Best effort: a lock that cannot be inspected or removed is left for git to
+/// report, which it does with a clearer message than this could.
+fn remove_stale_git_locks(git_dir: &Path, max_age: std::time::Duration) {
+    for name in MIRROR_LOCKFILES {
+        let path = git_dir.join(name);
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        // A lock git made is a regular file; anything else was not ours.
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(age) = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+        else {
+            continue;
+        };
+        if age <= max_age {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::warn!(
+                path = %path.display(),
+                age_secs = age.as_secs(),
+                "removed a stale git lockfile from the repository cache"
+            ),
+            Err(err) => tracing::warn!(
+                path = %path.display(),
+                age_secs = age.as_secs(),
+                %err,
+                "could not remove a stale git lockfile from the repository cache"
+            ),
+        }
     }
 }
 
@@ -542,6 +614,160 @@ mod tests {
             1,
             "refusing a mirror symlink must not prune or register external admin state"
         );
+    }
+
+    /// Commit a new head in the fixture's source and push it to `remote`.
+    fn push_new_head(fixture: &Path, remote: &Path) -> String {
+        let source = fixture.join("source");
+        std::fs::write(source.join("README.md"), "new fixture head\n").unwrap();
+        git(&["-C", source.to_str().unwrap(), "add", "README.md"]);
+        git(&[
+            "-C",
+            source.to_str().unwrap(),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "new fixture head",
+        ]);
+        let revision = git(&["-C", source.to_str().unwrap(), "rev-parse", "HEAD"]);
+        git(&[
+            "-C",
+            source.to_str().unwrap(),
+            "push",
+            "--quiet",
+            remote.to_str().unwrap(),
+            "HEAD",
+        ]);
+        revision
+    }
+
+    fn write_lock(path: &Path, age: std::time::Duration) {
+        std::fs::write(path, "").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn locks_older_than_any_git_invocation_are_removed_before_the_next_fetch() {
+        // Production: a SIGKILLed shallow fetch left `shallow.lock` behind and
+        // every later fetch of that repository failed with "File exists" for
+        // two days. Nothing but this server writes the mirror, and no git of
+        // ours lives past the timeout plus its termination grace, so a lock
+        // older than that is debris.
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let (remote, first_revision) = local_bare_repository(fixture.path());
+        let cache_root = fixture.path().join("cache");
+        let cache = RepositoryCache::at(&cache_root).expect("cache root");
+        let fetches = AtomicUsize::new(0);
+        cache
+            .checkout_from_url(
+                "acme/widgets",
+                &first_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("first checkout creates the mirror");
+        let second_revision = push_new_head(fixture.path(), &remote);
+        let mirror = cache_root.join("acme/widgets.git");
+        // A minute past the timeout: well beyond the few seconds of
+        // termination grace a timed-out git is given on top of it.
+        let stale = crate::indexer::fetch::GIT_TIMEOUT + std::time::Duration::from_secs(60);
+        for lock in MIRROR_LOCKFILES {
+            write_lock(&mirror.join(lock), stale);
+        }
+
+        let checkout = cache
+            .checkout_from_url(
+                "acme/widgets",
+                &second_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("a stale lock must not wedge the mirror");
+
+        assert_eq!(
+            std::fs::read(checkout.path().join("README.md")).unwrap(),
+            b"new fixture head\n"
+        );
+        for lock in MIRROR_LOCKFILES {
+            assert!(
+                !mirror.join(lock).exists(),
+                "{lock} should have been removed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fresh_lock_is_left_to_whoever_holds_it() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let (remote, first_revision) = local_bare_repository(fixture.path());
+        let cache_root = fixture.path().join("cache");
+        let cache = RepositoryCache::at(&cache_root).expect("cache root");
+        let fetches = AtomicUsize::new(0);
+        cache
+            .checkout_from_url(
+                "acme/widgets",
+                &first_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await
+            .expect("first checkout creates the mirror");
+        let second_revision = push_new_head(fixture.path(), &remote);
+        let lock = cache_root.join("acme/widgets.git/shallow.lock");
+        write_lock(&lock, std::time::Duration::from_secs(60));
+        let written = std::fs::metadata(&lock).unwrap().modified().unwrap();
+
+        let result = cache
+            .checkout_from_url(
+                "acme/widgets",
+                &second_revision,
+                remote.to_str().unwrap(),
+                "",
+                &fetches,
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a lock that may belong to a live git must make the fetch fail, not be stolen"
+        );
+        assert_eq!(
+            std::fs::metadata(&lock).unwrap().modified().unwrap(),
+            written,
+            "the fresh lock must be untouched"
+        );
+    }
+
+    #[test]
+    fn a_lock_a_terminating_git_may_still_hold_is_not_swept() {
+        // A timed-out git is signalled at GIT_TIMEOUT and given the
+        // termination grace to remove its own locks; until that has run out
+        // the lock may still be live.
+        let mirror = tempfile::tempdir().expect("mirror directory");
+        let lock = mirror.path().join("shallow.lock");
+        write_lock(
+            &lock,
+            crate::indexer::fetch::GIT_TIMEOUT + crate::indexer::fetch::GIT_TERMINATION_GRACE
+                - std::time::Duration::from_secs(1),
+        );
+
+        remove_stale_git_locks(mirror.path(), STALE_LOCK_AGE);
+
+        assert!(lock.exists());
     }
 
     #[test]
