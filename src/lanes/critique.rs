@@ -1506,7 +1506,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    a_cold_index_claim_about_an_existing_declared_module_is_still_capped() {
+    async fn a_cold_index_claim_about_an_existing_declared_module_is_still_capped() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/lib.rs",
