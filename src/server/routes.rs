@@ -1311,13 +1311,13 @@ async fn finalize_exhausted_review<CheckOwner, CheckOwnerFuture, Conclude, Concl
 where
     CheckOwner: FnOnce() -> CheckOwnerFuture,
     CheckOwnerFuture: std::future::Future<Output = Result<()>>,
-    Conclude: FnOnce() -> ConcludeFuture,
+    Conclude: FnOnce(Conclusion<'static>) -> ConcludeFuture,
     ConcludeFuture: std::future::Future<Output = ()>,
 {
     if check_owner().await.is_err() {
         return WorkerDisposition::OwnershipLost;
     }
-    conclude().await;
+    conclude(Conclusion::NotReviewed).await;
     timing.finish("failure");
     WorkerDisposition::Terminal(TerminalOutcome::Exhausted)
 }
@@ -2940,15 +2940,7 @@ where
     AfterCheck: FnOnce() -> AfterCheckFuture,
     AfterCheckFuture: std::future::Future<Output = ()>,
 {
-    let check = match conclusion {
-        Conclusion::Reviewed {
-            findings,
-            changes_requested,
-            coverage,
-        } => status::completed(&open.head_sha, findings, changes_requested, coverage),
-        Conclusion::NotReviewed => status::not_reviewed(&open.head_sha),
-        Conclusion::Failed(err) => failure::check_run(&open.head_sha, err),
-    };
+    let check = conclusion_check_run(&open.head_sha, &conclusion);
 
     let hub_body = match conclusion {
         Conclusion::Reviewed { .. } => None,
@@ -2974,6 +2966,19 @@ where
         _ => None,
     };
     (concluded, hub_updated)
+}
+
+/// The terminal umbrella check run for a decided conclusion.
+fn conclusion_check_run(head_sha: &str, conclusion: &Conclusion<'_>) -> crate::forge::types::CheckRun {
+    match conclusion {
+        Conclusion::Reviewed {
+            findings,
+            changes_requested,
+            coverage,
+        } => status::completed(head_sha, *findings, *changes_requested, coverage.clone()),
+        Conclusion::NotReviewed => status::not_reviewed(head_sha),
+        Conclusion::Failed(err) => failure::check_run(head_sha, err),
+    }
 }
 
 /// Create or migrate the durable hub before the first model call.
@@ -3408,7 +3413,7 @@ async fn handle_review(
                 return finalize_exhausted_review(
                     &timing,
                     || run.check_owner(&state),
-                    || async { close_status(&state, &slot, Conclusion::NotReviewed).await },
+                    |conclusion| async { close_status(&state, &slot, conclusion).await },
                 )
                 .await;
             }
@@ -8727,9 +8732,9 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
+            |conclusion| async move {
                 forge
-                    .update_check(&repo, check_id, status::not_reviewed("sha-7"))
+                    .update_check(&repo, check_id, conclusion_check_run("sha-7", &conclusion))
                     .await
                     .expect("conclude the open check");
             },
@@ -8864,9 +8869,9 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
+            |conclusion| async move {
                 forge
-                    .update_check(&repo, check_id, status::not_reviewed("sha-8"))
+                    .update_check(&repo, check_id, conclusion_check_run("sha-8", &conclusion))
                     .await
                     .expect("conclude fresh recovery check");
             },
@@ -9001,9 +9006,9 @@ mod tests {
                     Err(Error::ReviewOwnershipLost)
                 }
             },
-            || async {
+            |conclusion| async move {
                 forge
-                    .update_check(&repo, stale_check_id, status::not_reviewed("sha-9"))
+                    .update_check(&repo, stale_check_id, conclusion_check_run("sha-9", &conclusion))
                     .await
                     .expect("stale close is rejected before reaching the forge");
             },
