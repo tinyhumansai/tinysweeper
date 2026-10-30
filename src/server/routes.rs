@@ -3839,8 +3839,12 @@ where
     // Only cancellation by an ownership or supersession fence qualifies:
     // every `execution.cancel()` is one. An ordinary failure is charged even
     // without a model call, because that is the crash loop the budget bounds.
+    // `ReviewSuperseded` is matched directly because `check_work` returns it
+    // before anything cancels the scope: a stale hint can supersede a worker
+    // whose successor confirms the same head, and charging that would drain
+    // the head's budget with no model call made.
     let fenced = match &result {
-        Err(Error::ReviewOwnershipLost) => true,
+        Err(Error::ReviewOwnershipLost | Error::ReviewSuperseded) => true,
         Err(_) => execution.is_cancelled(),
         Ok(_) => false,
     };
