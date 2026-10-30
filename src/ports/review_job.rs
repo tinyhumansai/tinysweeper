@@ -17,6 +17,9 @@ pub const MAX_TERMINAL_REVIEW_RESERVATIONS: usize = 18_000;
 pub const MAX_RUNNING_REVIEWS: usize = 4;
 /// Paid recovery starts allowed for one accepted review across process restarts.
 pub const MAX_REVIEW_PAID_ATTEMPTS: u32 = 5;
+/// Paid starts that may be returned to one head's budget because their
+/// attempt ended at an ownership fence before any model dispatch.
+pub const MAX_REVIEW_OWNERSHIP_REFUNDS: u32 = 2 * MAX_REVIEW_PAID_ATTEMPTS;
 /// How long a job owner remains valid without a heartbeat.
 ///
 /// Three minutes against a fifteen-second heartbeat, so a worker survives
@@ -267,6 +270,9 @@ pub struct ScheduledReview {
     pub not_before_ms: i64,
     /// Paid-work starts consumed across process restarts.
     pub paid_attempts: u32,
+    /// Full-mode paid starts refunded after an ownership-fenced attempt.
+    #[serde(default)]
+    pub ownership_refunds: u32,
     /// New incremental delivery arrived while this owner was running. The
     /// owner keeps its global slot until it observes and acknowledges this.
     #[serde(default)]
@@ -323,6 +329,9 @@ pub struct IncrementalHeadBudget {
     pub head_sha: String,
     /// Paid starts consumed for this exact head across owners.
     pub paid_attempts: u32,
+    /// Paid starts refunded for this head after ownership-fenced attempts.
+    #[serde(default)]
+    pub ownership_refunds: u32,
     /// Deadline exhaustion is terminal until an authoritative head change.
     pub deadline_hit: bool,
     /// The terminal result for this exact head, if it already has one.
@@ -956,6 +965,7 @@ impl ReviewSchedulerState {
                 owner_until_ms: 0,
                 not_before_ms: 0,
                 paid_attempts: 0,
+                ownership_refunds: 0,
                 yield_requested: false,
                 review_checks: initial_check.into_iter().collect(),
                 status_reconcile_reserved: true,
@@ -1155,6 +1165,12 @@ impl ReviewSchedulerState {
         PaidStart::Started
     }
 
+    /// Return one paid start whose attempt ended at an ownership fence before
+    /// any model dispatch.
+    pub fn refund_paid(&mut self, _owned: &OwnedReview, _head_sha: &str, _now_ms: i64) -> bool {
+        false
+    }
+
     /// Bind an owned incremental request to the authoritative live head. A
     /// webhook SHA hint cannot reset a deadline marker or paid-start count.
     pub fn confirm_head(&mut self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> bool {
@@ -1238,6 +1254,7 @@ impl ReviewSchedulerState {
             // confirmation existed. Preserve that conservative count on the
             // first confirmed head; only a later confirmed transition resets it.
             paid_attempts: self.unfinished[index].paid_attempts,
+            ownership_refunds: 0,
             deadline_hit: false,
             terminal_outcome: None,
         });
@@ -1801,6 +1818,11 @@ pub trait ReviewJobStore: Send + Sync {
 
     /// Consume a paid attempt, retaining exhausted work until its owner concludes status.
     async fn begin_paid(&self, owned: &OwnedReview, now_ms: i64) -> Result<PaidStart>;
+
+    /// Return a paid start whose attempt was fenced before any model dispatch.
+    /// Needs no live ownership: the fence is usually why ownership is gone.
+    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64)
+    -> Result<bool>;
 
     /// Confirm the live head fetched from Forge after the review gate and lease.
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool>;

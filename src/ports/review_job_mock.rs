@@ -239,6 +239,14 @@ impl ReviewJobStore for MockReviewJobStore {
         Ok(self.state.lock().expect("state").begin_paid(owned, now_ms))
     }
 
+    async fn refund_paid(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool> {
+        Ok(self
+            .state
+            .lock()
+            .expect("state")
+            .refund_paid(owned, head_sha, now_ms))
+    }
+
     async fn confirm_head(&self, owned: &OwnedReview, head_sha: &str, now_ms: i64) -> Result<bool> {
         Ok(self
             .state
