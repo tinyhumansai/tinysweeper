@@ -3349,7 +3349,17 @@ async fn handle_review(
             }
             break err;
         }
-        let review_result = review_inner(&state, &repo, number, &author, installation, &run).await;
+        // Boxed: see `dispatch`. The lanes, checkout and publish under it are
+        // deep enough to overflow rustc's query depth limit when inlined.
+        let review_result = Box::pin(review_inner(
+            &state,
+            &repo,
+            number,
+            &author,
+            installation,
+            &run,
+        ))
+        .await;
         if let Ok(review) = &review_result
             && let Some(disposition) = shutdown_disposition(review, unix_time_ms())
         {
