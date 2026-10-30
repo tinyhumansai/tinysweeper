@@ -119,6 +119,20 @@ impl RetrievalStatus {
     pub fn is_degraded(&self) -> bool {
         !matches!(self, Self::Off | Self::Ready)
     }
+
+    /// Whether the review ran with no repository context at all: the index is
+    /// missing or could not be reached.
+    ///
+    /// Narrower than [`is_degraded`](Self::is_degraded) on purpose. `Stale` is
+    /// excluded: a stale index is real code from a recent revision, and it is
+    /// the normal state rather than an outage — the index holds one revision
+    /// per repository and the head is indexed in the background as the review
+    /// starts, so an exact match is the exception. The "index is behind" note
+    /// is the right signal for that; withholding findings on it silenced the
+    /// critique lane on nearly every review.
+    pub fn lacks_context(&self) -> bool {
+        matches!(self, Self::Cold | Self::Unavailable { .. })
+    }
 }
 
 /// Everything retrieval contributed to one review.

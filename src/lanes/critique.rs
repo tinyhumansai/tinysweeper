@@ -55,7 +55,11 @@ use crate::lanes::{Lane, LaneInput, LaneOutcome, reviewer_responses};
 use crate::ports::model::{Model, Spend, Usage};
 use crate::position::{PositionRequest, Positioner, Resolution, Unanchored};
 
-/// Confidence ceiling for critique model findings when retrieval is degraded.
+/// Confidence ceiling for critique model findings reviewed with no repository
+/// context ([`RetrievalStatus::lacks_context`](crate::retrieve::RetrievalStatus::lacks_context)).
+///
+/// Below the default `confidence_min`, so a capped finding can never pass the
+/// posting gate on its own.
 const DEGRADED_CONTEXT_CONFIDENCE_CAP: f64 = 0.7;
 
 /// The correctness lane.
@@ -222,7 +226,7 @@ impl Critique {
         if let Some(skipped) = prepared.skipped {
             return Ok(skipped);
         }
-        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.context_degraded = reviewed_without_context(input);
         outcome.spend.merge(llm.spend());
         outcome.include_reviewed_paths(prepared.covered_without_model);
         if let Some(substitution) = &prepared.mechanical {
@@ -324,7 +328,7 @@ impl Critique {
         // rather than per file: `llm` is shared across the fan-out, so adding
         // it per file would multiply the bill by the file count.
         let mut outcome = outcome.into_outcome();
-        outcome.context_degraded = input.retrieval_status.is_degraded();
+        outcome.context_degraded = reviewed_without_context(&input);
         outcome.include_reviewed_paths(covered_without_model);
         outcome.spend.merge(llm.spend());
         if let Some(sub) = &mechanical {
@@ -337,6 +341,23 @@ impl Critique {
         }
         Ok(outcome)
     }
+}
+
+/// Whether the reviewer saw no repository context beyond the diff.
+///
+/// [`RetrievalStatus::lacks_context`] answers that for the index itself. A
+/// `Stale` index is usually real context, but when every chunk it returned
+/// belonged to a changed file, nothing was rendered into the prompt and the
+/// review was diff-only, the same as a cold index. The gate follows what the
+/// model actually saw.
+///
+/// [`RetrievalStatus::lacks_context`]: crate::retrieve::RetrievalStatus::lacks_context
+fn reviewed_without_context(input: &LaneInput<'_>) -> bool {
+    input.retrieval_status.lacks_context()
+        || (matches!(
+            input.retrieval_status,
+            crate::retrieve::RetrievalStatus::Stale { .. }
+        ) && input.retrieved_context.trim().is_empty())
 }
 
 /// Review one group of related changed files, in a conversation that knows
@@ -714,8 +735,10 @@ async fn review_group(
     // non-blocking structured notes. A Likely cap makes that caveat visible
     // in their confidence badge without allowing unsupported repository-wide
     // claims to drive a check verdict or inline comment. Scanners have their
-    // own evidence and are outside this model-finding gate.
-    if input.retrieval_status.is_degraded() {
+    // own evidence and are outside this model-finding gate. Gated on
+    // `lacks_context`, not `is_degraded`: a stale index still gave the
+    // reviewer real code, and capping on it silenced nearly every review.
+    if reviewed_without_context(input) {
         capped_for_degraded_context = findings.len();
         for finding in &mut findings {
             finding.confidence = finding.confidence.min(DEGRADED_CONTEXT_CONFIDENCE_CAP);
@@ -1159,7 +1182,16 @@ fn helper() {
         file_contents: &BTreeMap<String, String>,
         retrieval_status: crate::retrieve::RetrievalStatus,
     ) -> LaneOutcome {
-        run_with_context_and_tree(model, config, diffs, file_contents, retrieval_status, None).await
+        run_with_context_and_tree(
+            model,
+            config,
+            diffs,
+            file_contents,
+            retrieval_status,
+            "",
+            None,
+        )
+        .await
     }
 
     async fn run_with_context_and_tree(
@@ -1168,6 +1200,7 @@ fn helper() {
         diffs: &[FileDiff],
         file_contents: &BTreeMap<String, String>,
         retrieval_status: crate::retrieve::RetrievalStatus,
+        retrieved_context: &str,
         tree: Option<&dyn crate::ports::tree::TreeReader>,
     ) -> LaneOutcome {
         let pr = pull_request();
@@ -1184,7 +1217,7 @@ fn helper() {
                 reviewed_evidence: "",
                 prior_findings: &[],
                 retrieval_status,
-                retrieved_context: "",
+                retrieved_context,
                 redaction_note: "",
                 e2e: None,
                 tree,
@@ -1240,7 +1273,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_index_keeps_unsupported_unchanged_code_at_likely_confidence() {
+    async fn a_cold_index_keeps_unsupported_unchanged_code_at_likely_confidence() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1277,8 +1310,111 @@ fn helper() {
             outcome.findings[0].confidence,
             DEGRADED_CONTEXT_CONFIDENCE_CAP
         );
+        assert!(
+            outcome.context_degraded,
+            "a cold index is no context at all"
+        );
         assert!(outcome.summary.contains("capped at Likely confidence"));
         assert!(!outcome.summary.contains("old branch is broken"));
+    }
+
+    /// One critical, high-confidence claim about an unchanged line, under
+    /// `retrieval_status`, with `retrieved_context` rendered into the prompt.
+    async fn unchanged_line_claim_under(
+        retrieval_status: crate::retrieve::RetrievalStatus,
+        retrieved_context: &str,
+    ) -> LaneOutcome {
+        let diffs = vec![parse_file_patch(
+            "src/main.rs",
+            "@@ -1,2 +1,3 @@\n fn main() {\n+    let ready = true;\n }\n",
+        )];
+        let model = MockModel::new()
+            .then(json!({
+                "summary": "The old branch is broken.",
+                "findings": [{
+                    "path": "src/main.rs",
+                    "existing_code": "fn main() {",
+                    "rule": "bad-caller",
+                    "title": "Handle the old caller",
+                    "body": "The unchanged caller uses an incompatible contract.",
+                    "severity": "critical",
+                    "confidence": 0.99
+                }]
+            }))
+            .then(json!({"incorrect": []}));
+        run_with_context_and_tree(
+            model,
+            &config(),
+            &diffs,
+            &BTreeMap::new(),
+            retrieval_status,
+            retrieved_context,
+            None,
+        )
+        .await
+    }
+
+    /// Context the retrieval layer would render for the claim's caller.
+    const RENDERED_CALLER: &str =
+        "### src/caller.rs (lines 1-3)\n```rust\nfn caller() { main(); }\n```\n";
+
+    #[tokio::test]
+    async fn a_stale_index_neither_caps_confidence_nor_marks_the_lane_context_degraded() {
+        // A stale index is real code from a recent revision, and it is the
+        // usual state: the head is indexed in the background as the review
+        // starts. Treating it like a cold index withheld every finding.
+        let outcome = unchanged_line_claim_under(
+            crate::retrieve::RetrievalStatus::Stale {
+                indexed: Some("olderrevision0000000".into()),
+            },
+            RENDERED_CALLER,
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.findings[0].confidence, 0.99);
+        assert!(!outcome.context_degraded);
+        assert!(!outcome.summary.contains("capped at Likely confidence"));
+    }
+
+    #[tokio::test]
+    async fn a_stale_index_that_rendered_no_context_is_treated_as_no_context() {
+        // Every retrieved chunk can belong to a changed file, in which case
+        // nothing reaches the prompt and the reviewer saw the diff alone,
+        // exactly as with a cold index. The status says Stale; the prompt
+        // says otherwise, and the prompt is what the model reviewed.
+        let outcome = unchanged_line_claim_under(
+            crate::retrieve::RetrievalStatus::Stale {
+                indexed: Some("olderrevision0000000".into()),
+            },
+            "  \n",
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert!(outcome.context_degraded);
+    }
+
+    #[tokio::test]
+    async fn unavailable_retrieval_caps_confidence_and_marks_the_lane_context_degraded() {
+        let outcome = unchanged_line_claim_under(
+            crate::retrieve::RetrievalStatus::Unavailable {
+                reason: "the embedding provider is down".into(),
+            },
+            "",
+        )
+        .await;
+
+        assert_eq!(outcome.findings.len(), 1, "{outcome:?}");
+        assert_eq!(
+            outcome.findings[0].confidence,
+            DEGRADED_CONTEXT_CONFIDENCE_CAP
+        );
+        assert!(outcome.context_degraded);
     }
 
     #[tokio::test]
@@ -1309,7 +1445,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn degraded_retrieval_keeps_findings_grounded_on_changed_lines() {
+    async fn cold_retrieval_keeps_findings_grounded_on_changed_lines() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1402,6 +1538,7 @@ fn helper() {
             &diffs,
             &BTreeMap::new(),
             crate::retrieve::RetrievalStatus::Cold,
+            "",
             Some(&tree),
         )
         .await;
@@ -1419,7 +1556,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn degraded_retrieval_caps_readable_unchanged_anchor_without_caller_evidence() {
+    async fn cold_retrieval_caps_readable_unchanged_anchor_without_caller_evidence() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/main.rs",
@@ -1477,6 +1614,7 @@ fn helper() {
             &diffs,
             &BTreeMap::new(),
             crate::retrieve::RetrievalStatus::Cold,
+            "",
             Some(&tree),
         )
         .await;
@@ -1506,7 +1644,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_claim_about_an_existing_declared_module_is_still_capped() {
+    async fn a_cold_index_claim_about_an_existing_declared_module_is_still_capped() {
         let config = config();
         let diffs = vec![parse_file_patch(
             "src/lib.rs",
@@ -1535,6 +1673,7 @@ fn helper() {
             &diffs,
             &BTreeMap::new(),
             crate::retrieve::RetrievalStatus::Cold,
+            "",
             Some(&tree),
         )
         .await;
@@ -1583,6 +1722,7 @@ fn helper() {
             &diffs,
             &BTreeMap::new(),
             crate::retrieve::RetrievalStatus::Cold,
+            "",
             Some(&tree),
         )
         .await;
@@ -1877,7 +2017,7 @@ fn helper() {
     }
 
     #[tokio::test]
-    async fn a_degraded_missing_module_claim_is_capped_without_a_successful_head_read() {
+    async fn a_cold_index_missing_module_claim_is_capped_without_a_successful_head_read() {
         let mut config = config();
         config.grouping.enabled = false;
         let pr = pull_request();

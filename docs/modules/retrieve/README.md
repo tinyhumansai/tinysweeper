@@ -132,6 +132,16 @@ review. A missing manifest is likewise not reported — no record is not evidenc
 of staleness, and an operator who chases a stale index that is fine stops
 believing the notice.
 
+Reporting a degradation and acting on it are separate questions.
+`RetrievalStatus::is_degraded()` decides the note; the narrower
+`lacks_context()` — true only for `Cold` and `Unavailable` — decides whether
+the `critique` lane caps its model findings at Likely and the application keeps
+them as non-blocking "unverified" notes. `Stale` is reported but not acted on:
+the index holds one revision per repository and the head is indexed in the
+background as the review starts, so a stale index is the normal state, and it
+is still real code from a recent revision. Gating on it once withheld every
+critique finding from every pull request.
+
 ## Where it sits in the prompt
 
 The **suffix**, always. Retrieved context is composed from this diff, so it
