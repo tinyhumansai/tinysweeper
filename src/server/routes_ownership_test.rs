@@ -314,7 +314,7 @@ async fn a_supersession_fence_before_any_model_call_is_refunded_without_a_cancel
         || async { Ok(InnerReview::Complete(None)) },
     )
     .await;
-    assert!(matches!(result, Err(Error::ReviewSuperseded)), "{result:?}");
+    assert!(matches!(result, Err(Error::ReviewSuperseded)));
     assert!(!execution.is_cancelled());
     assert_eq!(
         store.snapshot_for_test().incremental_heads[0].paid_attempts,
